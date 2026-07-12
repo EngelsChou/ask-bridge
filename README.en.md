@@ -1,6 +1,6 @@
 # Ask Bridge 🦀
 
-`ask-bridge` is a powerful, lightweight command-line tool written in **Rust** that automates ChatGPT, Gemini or Claude directly in your real Chrome browser. It uses the **Model Context Protocol (MCP)** and **Chrome DevTools Protocol (CDP)** via the embedded `doggy8088/mcp-cli` Rust library dependency and `chrome-devtools-mcp` to control Chrome, input prompts, click submit, and print the response back to your terminal. ChatGPT is the default when no global provider is configured; use `--provider gemini`, `--provider claude`, or the global config file to switch providers.
+`ask-bridge` is a powerful, lightweight command-line tool written in **Rust** that automates ChatGPT, Gemini, Claude or Microsoft 365 Copilot directly in your real Chrome browser. It uses the **Model Context Protocol (MCP)** and **Chrome DevTools Protocol (CDP)** via the embedded `doggy8088/mcp-cli` Rust library dependency and `chrome-devtools-mcp` to control Chrome, input prompts, click submit, and print the response back to your terminal. ChatGPT is the default when no global provider is configured; use `--provider gemini`, `--provider claude`, `--provider copilot`, or the global config file to switch providers.
 
 ## Design Intent
 
@@ -29,7 +29,7 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 ## 🌟 Key Features
 
 - **🦀 100% Rust Core**: Extremely fast, lightweight, and compile-once, run-anywhere binary.
-- **Multi-provider support**: Choose ChatGPT, Gemini, or Claude with `--provider chatgpt|gemini|claude`.
+- **Multi-provider support**: Choose ChatGPT, Gemini, Claude, or Microsoft 365 Copilot with `--provider chatgpt|gemini|claude|copilot`.
 - **Global provider config**: Set the default provider in `~/.config/ask-bridge/config.json`; CLI `--provider` overrides the config file.
 - **🌐 Real Browser Automation**: Directly interacts with Chrome on port `9223` (isolated debug profile).
 - **🔒 Persistent Login**: Uses a dedicated local profile directory (`~/.config/ask-bridge/chrome-profile`) so you never lose your login state.
@@ -144,10 +144,11 @@ For Gemini or Claude:
 ```bash
 ask-bridge --provider gemini login
 ask-bridge --provider claude login
+ask-bridge --provider copilot login
 ```
 
 - This will automatically launch Google Chrome with a dedicated, persistent debug profile.
-- Log in manually to the selected provider page, such as `https://chatgpt.com/`, `https://gemini.google.com/app`, or `https://claude.ai/new`.
+- Log in manually to the selected provider page, such as `https://chatgpt.com/`, `https://gemini.google.com/app`, `https://claude.ai/new`, or `https://m365.cloud.microsoft/chat/`.
 - The tool now checks login status every second automatically, so you can stay on the browser and it will return immediately after login is detected.
 - If login is not detected within `--timeout` seconds (default: 300), it will warn you to verify the result and retry.
 
@@ -341,6 +342,7 @@ To quickly launch the browser and open the selected provider without sending any
 ask-bridge open
 ask-bridge --provider gemini open
 ask-bridge --provider claude open
+ask-bridge --provider copilot open
 ```
 
 ### 11. Close the Browser Instance

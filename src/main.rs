@@ -42,7 +42,7 @@ impl LoginSignals {
             LoginState::Unknown
         } else if self.auth_control {
             LoginState::LoggedOut
-        } else if self.composer && provider == Provider::ChatGpt {
+        } else if self.composer && matches!(provider, Provider::ChatGpt | Provider::Copilot) {
             LoginState::LoggedIn
         } else {
             LoginState::Unknown
@@ -58,6 +58,8 @@ enum Provider {
     Gemini,
     #[value(name = "claude")]
     Claude,
+    #[value(name = "copilot")]
+    Copilot,
 }
 
 impl Provider {
@@ -66,6 +68,7 @@ impl Provider {
             "chatgpt" | "chat-gpt" | "chat_gpt" => Some(Provider::ChatGpt),
             "gemini" => Some(Provider::Gemini),
             "claude" | "claude-ai" | "claude_ai" | "claudeai" => Some(Provider::Claude),
+            "copilot" | "m365-copilot" | "m365_copilot" => Some(Provider::Copilot),
             _ => None,
         }
     }
@@ -75,6 +78,7 @@ impl Provider {
             Provider::ChatGpt => "ChatGPT",
             Provider::Gemini => "Gemini",
             Provider::Claude => "Claude",
+            Provider::Copilot => "Microsoft 365 Copilot",
         }
     }
 
@@ -83,6 +87,7 @@ impl Provider {
             Provider::ChatGpt => "https://chatgpt.com/",
             Provider::Gemini => "https://gemini.google.com/app",
             Provider::Claude => "https://claude.ai/new",
+            Provider::Copilot => "https://m365.cloud.microsoft/chat/",
         }
     }
 
@@ -91,13 +96,19 @@ impl Provider {
             Provider::ChatGpt => url.contains("chatgpt.com"),
             Provider::Gemini => url.contains("gemini.google.com"),
             Provider::Claude => url.contains("claude.ai"),
+            Provider::Copilot => url.contains("m365.cloud.microsoft"),
         }
     }
 
     fn from_url(url: &str) -> Option<Self> {
-        [Provider::ChatGpt, Provider::Gemini, Provider::Claude]
-            .into_iter()
-            .find(|provider| provider.owns_url(url))
+        [
+            Provider::ChatGpt,
+            Provider::Gemini,
+            Provider::Claude,
+            Provider::Copilot,
+        ]
+        .into_iter()
+        .find(|provider| provider.owns_url(url))
     }
 
     fn ready_check_js(self) -> &'static str {
@@ -119,6 +130,15 @@ impl Provider {
                            document.querySelector('[data-testid="login-with-google"]') !== null ||
                            window.location.pathname.startsWith('/login') ||
                            /Sign in|登入/.test(document.body.innerText || '');
+                }"#
+            }
+            Provider::Copilot => {
+                r#"() => {
+                    return document.querySelector('textarea#userInput') !== null ||
+                           document.querySelector('textarea[data-testid*="chat-input"]') !== null ||
+                           document.querySelector('[contenteditable="true"][role="textbox"]') !== null ||
+                           Array.from(document.querySelectorAll('button, a'))
+                               .some((el) => /^(sign in|log in)$/i.test((el.textContent || '').trim()));
                 }"#
             }
         }
@@ -269,6 +289,36 @@ impl Provider {
                     };
                 }"#
             }
+            Provider::Copilot => {
+                r#"() => {
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0' &&
+                            rect.width > 0 && rect.height > 0;
+                    };
+                    const composer = document.querySelector('textarea#userInput') ||
+                        document.querySelector('textarea[data-testid*="chat-input"]') ||
+                        document.querySelector('[contenteditable="true"][role="textbox"]');
+                    const account = document.querySelector('[data-testid*="account"]') ||
+                        document.querySelector('button[aria-label*="Account manager"]') ||
+                        document.querySelector('button[aria-label*="Profile"]');
+                    const signIn = Array.from(document.querySelectorAll('a, button'))
+                        .find((el) => isVisible(el) && /^(sign in|log in)$/i.test([
+                            el.getAttribute('aria-label'), el.textContent
+                        ].filter(Boolean).join(' ').trim()));
+                    return {
+                        account: isVisible(account),
+                        auth_control: Boolean(signIn),
+                        auth_path: /\/(login|signin|oauth|auth)(\/|$)/i.test(window.location.pathname),
+                        composer: isVisible(composer),
+                        stable: true
+                    };
+                }"#
+            }
         }
     }
 
@@ -277,6 +327,9 @@ impl Provider {
             Provider::ChatGpt => "[data-message-author-role=\"assistant\"], .agent-turn",
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
+            Provider::Copilot => {
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"]"
+            }
         }
     }
 
@@ -287,6 +340,9 @@ impl Provider {
             }
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
+            Provider::Copilot => {
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"]"
+            }
         }
     }
 
@@ -297,6 +353,9 @@ impl Provider {
                 "message-content, .markdown, structured-content-container.model-response-text"
             }
             Provider::Claude => ".standard-markdown, .font-claude-response-body",
+            Provider::Copilot => {
+                "[data-testid*=\"message-content\"], .markdown, .ac-textBlock, [class*=\"markdown\"]"
+            }
         }
     }
 
@@ -315,6 +374,13 @@ impl Provider {
                     "div[contenteditable=\"true\"][data-testid=\"chat-input\"]",
                     "div[contenteditable=\"true\"].ProseMirror",
                     "div[aria-label*=\"Claude\"][contenteditable=\"true\"]"
+                ]"#
+            }
+            Provider::Copilot => {
+                r#"[
+                    "textarea#userInput",
+                    "textarea[data-testid*=\"chat-input\"]",
+                    "[contenteditable=\"true\"][role=\"textbox\"]"
                 ]"#
             }
         }
@@ -347,6 +413,15 @@ impl Provider {
                     "button[aria-label*=\"傳送\"]"
                 ]"#
             }
+            Provider::Copilot => {
+                r#"[
+                    "button[data-testid*=\"submit\"]",
+                    "button[data-testid*=\"send\"]",
+                    "button[aria-label=\"Send\"]",
+                    "button[aria-label=\"Submit\"]",
+                    "button[aria-label*=\"Send message\"]"
+                ]"#
+            }
         }
     }
 
@@ -373,6 +448,14 @@ impl Provider {
                     "button[aria-label*=\"停止\"]"
                 ]"#
             }
+            Provider::Copilot => {
+                r#"[
+                    "button[data-testid*=\"stop\"]",
+                    "button[aria-label*=\"Stop generating\"]",
+                    "button[aria-label*=\"Stop responding\"]",
+                    "button[aria-label=\"Stop\"]"
+                ]"#
+            }
         }
     }
 }
@@ -383,6 +466,7 @@ impl fmt::Display for Provider {
             Provider::ChatGpt => write!(f, "chatgpt"),
             Provider::Gemini => write!(f, "gemini"),
             Provider::Claude => write!(f, "claude"),
+            Provider::Copilot => write!(f, "copilot"),
         }
     }
 }
@@ -427,7 +511,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 #[command(name = "ask-bridge")]
 #[command(version = "0.2.8")]
 #[command(disable_version_flag = true)]
-#[command(about = "AI browser CLI - Ask ChatGPT, Gemini or Claude from your Terminal with your subscription", long_about = None)]
+#[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -565,7 +649,7 @@ fn load_configured_provider() -> Result<Option<Provider>, String> {
 
     parse_configured_provider(&content).map_err(|e| {
         format!(
-            "{}. Expected format: {{\"provider\":\"chatgpt\"}} or {{\"provider\":\"gemini\"}}",
+            "{}. Expected provider: chatgpt, gemini, claude, or copilot",
             e
         )
     })
@@ -654,7 +738,7 @@ fn run_config_command(cli_provider: Option<Provider>) -> Result<(), String> {
                 );
             }
             println!(
-                "Set default provider with: ask-bridge config --provider <chatgpt|gemini|claude>"
+                "Set default provider with: ask-bridge config --provider <chatgpt|gemini|claude|copilot>"
             );
             println!("This is a one-time override example: ask-bridge --provider gemini <prompt>");
             Ok(())
@@ -2058,6 +2142,14 @@ fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<()
         );
     }
 
+    if provider == Provider::Copilot && (!cli.images.is_empty() || !cli.files.is_empty()) {
+        return Err("Microsoft 365 Copilot attachments are not supported yet.".to_string());
+    }
+
+    if provider == Provider::Copilot && cli.model.is_some() {
+        return Err("Microsoft 365 Copilot model switching is not supported yet.".to_string());
+    }
+
     Ok(())
 }
 
@@ -2361,6 +2453,14 @@ mod tests {
             parse_configured_provider(r#"{"provider":"claude-ai"}"#).unwrap(),
             Some(Provider::Claude)
         );
+        assert_eq!(
+            parse_configured_provider(r#"{"provider":"copilot"}"#).unwrap(),
+            Some(Provider::Copilot)
+        );
+        assert_eq!(
+            parse_configured_provider(r#"{"provider":"m365-copilot"}"#).unwrap(),
+            Some(Provider::Copilot)
+        );
         assert_eq!(parse_configured_provider(r#"{}"#).unwrap(), None);
     }
 
@@ -2395,7 +2495,7 @@ mod tests {
 
     #[test]
     fn rejects_invalid_provider_in_config_json() {
-        let err = parse_configured_provider(r#"{"provider":"copilot"}"#).unwrap_err();
+        let err = parse_configured_provider(r#"{"provider":"unknown"}"#).unwrap_err();
         assert!(err.contains("Invalid provider"));
     }
 
@@ -2452,8 +2552,9 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unknown_provider() {
-        assert!(Cli::try_parse_from(["ask-bridge", "--provider", "copilot", "hello"]).is_err());
+    fn parses_copilot_provider_argument() {
+        let cli = Cli::try_parse_from(["ask-bridge", "--provider", "copilot", "hello"]).unwrap();
+        assert_eq!(cli.provider, Some(Provider::Copilot));
     }
 
     #[test]
@@ -2476,7 +2577,51 @@ mod tests {
             Provider::from_url("https://claude.ai/chat/abc"),
             Some(Provider::Claude)
         );
+        assert_eq!(
+            Provider::from_url("https://m365.cloud.microsoft/chat/abc"),
+            Some(Provider::Copilot)
+        );
         assert_eq!(Provider::from_url("https://example.com"), None);
+    }
+
+    #[test]
+    fn copilot_selector_lists_are_valid_json() {
+        for selectors in [
+            Provider::Copilot.composer_selectors_json(),
+            Provider::Copilot.send_button_selectors_json(),
+            Provider::Copilot.stop_button_selectors_json(),
+        ] {
+            let parsed: Vec<String> = serde_json::from_str(selectors).unwrap();
+            assert!(!parsed.is_empty());
+        }
+    }
+
+    #[test]
+    fn rejects_copilot_attachments() {
+        let cli = Cli::try_parse_from([
+            "ask-bridge",
+            "--provider",
+            "copilot",
+            "hello",
+            "--file",
+            "notes.md",
+        ])
+        .unwrap();
+        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_err());
+    }
+
+    #[test]
+    fn rejects_copilot_model_switching() {
+        let cli = Cli::try_parse_from([
+            "ask-bridge",
+            "--provider",
+            "copilot",
+            "hello",
+            "--model",
+            "work",
+        ])
+        .unwrap();
+        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_err());
     }
 
     #[test]
@@ -3874,6 +4019,9 @@ fn upload_attachments_via_file_chooser(
 
         let snapshot = take_snapshot_text(config_path)?;
         let menu_uid = match provider {
+            Provider::Copilot => {
+                return Err("Microsoft 365 Copilot attachments are not supported yet.".to_string());
+            }
             Provider::Gemini => {
                 find_snapshot_uid(&snapshot, &["上傳與工具"], &["更多", "雲端", "drive"])
                     .or_else(|| find_snapshot_uid(&snapshot, &["upload"], &["drive"]))
@@ -3901,6 +4049,9 @@ fn upload_attachments_via_file_chooser(
 
         let snapshot = take_snapshot_text(config_path)?;
         let upload_uid = match provider {
+            Provider::Copilot => {
+                return Err("Microsoft 365 Copilot attachments are not supported yet.".to_string());
+            }
             Provider::Gemini => find_snapshot_uid(&snapshot, &["上傳檔案"], &["雲端", "drive"])
                 .or_else(|| find_snapshot_uid(&snapshot, &["upload", "file"], &["drive"])),
             Provider::ChatGpt => find_snapshot_uid(&snapshot, &["file"], &["drive", "connect"]),
@@ -4248,6 +4399,10 @@ fn switch_model(
     model: &str,
     verbose: bool,
 ) -> Result<(), String> {
+    if provider == Provider::Copilot {
+        return Err("Microsoft 365 Copilot model switching is not supported yet.".to_string());
+    }
+
     if model.trim().is_empty() {
         return Err("Empty model name".to_string());
     }
@@ -4444,6 +4599,7 @@ fn switch_model(
             }"#;
             template.replace("__TARGET_MODEL__", &target_json)
         }
+        Provider::Copilot => unreachable!("Copilot model switching is rejected above"),
     };
 
     let start_res = call_mcp_tool(

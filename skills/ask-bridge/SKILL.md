@@ -7,7 +7,7 @@ description: "完整使用 ask-bridge CLI 的 Agent Skill。使用 ask-bridge �
 
 ## 核心原則
 
-使用 `ask-bridge` 把低風險、探索性、可委派的 AI 任務交給 ChatGPT、Gemini 或 Claude 網站處理，再將回覆作為本機工作流程的參考輸入。不要把 provider 回覆視為事實來源、測試結果或已完成的程式碼變更。
+使用 `ask-bridge` 把低風險、探索性、可委派的 AI 任務交給 ChatGPT、Gemini、Claude 或 Microsoft 365 Copilot 網站處理，再將回覆作為本機工作流程的參考輸入。不要把 provider 回覆視為事實來源、測試結果或已完成的程式碼變更。
 
 優先把主要 Coding Agent 保留給下列工作：讀取專案脈絡、修改檔案、執行測試、驗證行為、整合結論。把 `ask-bridge` 用於背景研究、摘要、候選方案、初稿與輔助分析。
 
@@ -75,7 +75,7 @@ ask-bridge -v
 
 provider 優先序：
 
-1. CLI `--provider chatgpt|gemini|claude`
+1. CLI `--provider chatgpt|gemini|claude|copilot`
 2. `~/.config/ask-bridge/config.json` 的 `provider`
 3. 內建預設 `chatgpt`
 
@@ -162,7 +162,7 @@ prompt + "\n\n" + stdin
 | 參數 | 用途 | 用法重點 |
 |---|---|---|
 | `[PROMPT]` | 要送給 provider 的文字 prompt | 可省略；若 stdin 有內容則使用 stdin；若兩者都有，會以兩個換行串接 |
-| `-p`, `--provider <PROVIDER>` | 選擇 provider | 可用 `chatgpt`、`gemini` 或 `claude`；此為 global option，可放在子命令前後；優先權高於全域設定檔 |
+| `-p`, `--provider <PROVIDER>` | 選擇 provider | 可用 `chatgpt`、`gemini`、`claude` 或 `copilot`；此為 global option，可放在子命令前後；優先權高於全域設定檔 |
 | `--headless[=<HEADLESS>]` | 控制 Chrome 是否 headless | 預設 `true`；要顯示瀏覽器請用 `--headless=false`；不要寫成 `--headless false` |
 | `--new` | 開啟全新 provider 對話 | 會開新分頁並清理同 provider 舊分頁；用於隔離上下文 |
 | `-v`, `-V`, `--version` | 顯示版本 | `-V` 是原始碼中定義的短別名；文件與一般操作優先用 `-v` 或 `--version` |
@@ -173,7 +173,7 @@ prompt + "\n\n" + stdin
 | `--file <FILE>` | 附加文件檔，可重複指定 | 支援 PDF、Word、Excel、PowerPoint、純文字、Markdown、CSV、JSON、程式碼等；ChatGPT、Gemini 與 Claude 都可用 |
 | `--model <MODEL>` | 送出 prompt 前切換模型 | 比對不分大小寫與標點；模型名稱取決於 provider UI 與帳號權限 |
 | `-h`, `--help` | 顯示 help | 可用 `ask-bridge --help` 或 `ask-bridge help <COMMAND>` |
-| `config` | 設定或顯示全域預設 provider | 使用 `ask-bridge config --provider <chatgpt|gemini|claude>` |
+| `config` | 設定或顯示全域預設 provider | 使用 `ask-bridge config --provider <chatgpt|gemini|claude|copilot>` |
 
 ## Provider 選擇
 

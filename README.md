@@ -1,6 +1,6 @@
 # Ask Bridge 🦀
 
-`ask-bridge` 是以 Rust 撰寫的輕量命令列工具，可透過真實 Chrome 瀏覽器自動操作 ChatGPT、Gemini 與 Claude。它使用 Model Context Protocol MCP 與 Chrome DevTools Protocol CDP，並透過內建的 `doggy8088/mcp-cli` Rust library dependency 搭配 `chrome-devtools-mcp` 控制 Chrome、輸入 prompt、送出訊息，並將回覆輸出到終端機。未設定全域 provider 時預設使用 ChatGPT，可用 `--provider gemini`、`--provider claude` 或全域設定檔切換 provider。
+`ask-bridge` 是以 Rust 撰寫的輕量命令列工具，可透過真實 Chrome 瀏覽器自動操作 ChatGPT、Gemini、Claude 與 Microsoft 365 Copilot。它使用 Model Context Protocol MCP 與 Chrome DevTools Protocol CDP，並透過內建的 `doggy8088/mcp-cli` Rust library dependency 搭配 `chrome-devtools-mcp` 控制 Chrome、輸入 prompt、送出訊息，並將回覆輸出到終端機。未設定全域 provider 時預設使用 ChatGPT，可用 `--provider gemini`、`--provider claude`、`--provider copilot` 或全域設定檔切換 provider。
 
 ## 設計意圖
 
@@ -28,7 +28,7 @@
 ## 主要功能
 
 - **100% Rust 核心**：快速、輕量，編譯後即可執行。
-- **多 provider 支援**：使用 `--provider chatgpt|gemini|claude` 選擇 ChatGPT、Gemini 或 Claude。
+- **多 provider 支援**：使用 `--provider chatgpt|gemini|claude|copilot` 選擇 ChatGPT、Gemini、Claude 或 Microsoft 365 Copilot。
 - **全域 provider 設定**：可在 `~/.config/ask-bridge/config.json` 指定預設 provider，CLI 的 `--provider` 會覆蓋設定檔。
 - **真實瀏覽器自動化**：直接控制監聽 `9223` port 的 Chrome debug profile。
 - **持久登入狀態**：使用專屬本機 profile 目錄 `~/.config/ask-bridge/chrome-profile`，避免重複登入。
@@ -137,12 +137,13 @@ ask-bridge login
 ```bash
 ask-bridge --provider gemini login
 ask-bridge --provider claude login
+ask-bridge --provider copilot login
 ```
 
 此命令會：
 
 - 使用專屬且持久化的 debug profile 啟動 Google Chrome。
-- 開啟所選 provider 頁面，例如 `https://chatgpt.com/`、`https://gemini.google.com/app` 或 `https://claude.ai/new`。
+- 開啟所選 provider 頁面，例如 `https://chatgpt.com/`、`https://gemini.google.com/app`、`https://claude.ai/new` 或 `https://m365.cloud.microsoft/chat/`。
 - 等待你手動登入帳號。
 - 本工具會每秒自動偵測登入狀態，不需要你回到終端機按 Enter；若超過 `--timeout`（預設 300 秒）仍未偵測到登入完成，會提醒你再確認一次。
 
@@ -344,6 +345,7 @@ ask-bridge --provider claude "證明這個數學問題。" --model Opus
 ask-bridge open
 ask-bridge --provider gemini open
 ask-bridge --provider claude open
+ask-bridge --provider copilot open
 ```
 
 ### 11. 關閉瀏覽器 instance
