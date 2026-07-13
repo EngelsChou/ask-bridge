@@ -18,5 +18,14 @@ jobs:
         with:
           node-version: 22
       - run: cargo fmt --all -- --check
+      - run: cargo fmt --manifest-path windows-installer/Cargo.toml --all -- --check
       - run: cargo test
       - run: npm test
+
+  windows-installer:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - shell: pwsh
+        run: ./scripts/build-windows-installers.ps1

@@ -82,6 +82,16 @@ curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.s
 irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | iex
 ```
 
+若公司網路不允許 `npm install` 或安裝時連線 GitHub，可改用 Release 附件中的 `install.exe` 進行完全離線的使用者層級安裝，不需要系統管理員權限。此檔案已內嵌 `ask-bridge.exe`、`ask.exe`、更新輔助程式及 `uninstall.exe`，安裝過程不會執行 npm，也不會下載任何內容。Node.js、npx、`chrome-devtools-mcp@1.5.0` 與 Google Chrome 屬於執行環境前置需求；若公司電腦已經安裝或快取，安裝程式會直接沿用。
+
+從原始碼產生離線安裝程式時，請在 Windows PowerShell 執行：
+
+```powershell
+.\scripts\build-windows-installers.ps1
+```
+
+輸出位於 `dist\windows\install.exe` 與 `dist\windows\uninstall.exe`，並附有各自的 SHA-256 檔案。`install.exe` 預設安裝到 `%USERPROFILE%\.local\bin` 並加入使用者 `PATH`；`uninstall.exe` 會移除程式與 PATH 項目，預設保留登入設定及 Chrome profile，搭配 `--purge` 才會一併清除。
+
 > [!NOTE]
 > 請確保安裝路徑（macOS/Linux 為 `~/.local/bin`；Windows 為 `$HOME\.local\bin`）已加入您的系統 `PATH` 環境變數中。
 > 正式 CLI 命令為 `ask-bridge`；安裝流程也會提供 `ask` 作為向後相容 alias。以下範例皆以 `ask-bridge` 為準。

@@ -18,3 +18,6 @@ target/
 ### npm wrapper ###
 node_modules/
 npm/*-bin/
+
+### Local Windows installer output ###
+dist/windows/

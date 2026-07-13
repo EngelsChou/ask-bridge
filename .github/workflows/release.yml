@@ -63,6 +63,10 @@ jobs:
 
           $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $(Split-Path $archive -Leaf)" | Out-File "$archive.sha256" -Encoding ascii
+      - name: Build offline Windows installers
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/build-windows-installers.ps1 -OutputDirectory dist
       - uses: actions/upload-artifact@v4
         with:
           name: ask-bridge-${{ matrix.target }}
