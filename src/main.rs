@@ -328,7 +328,7 @@ impl Provider {
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
             Provider::Copilot => {
-                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"]"
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], [class*=\"CopilotMessage\"]"
             }
         }
     }
@@ -341,7 +341,7 @@ impl Provider {
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
             Provider::Copilot => {
-                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"]"
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], [class*=\"CopilotMessage\"]"
             }
         }
     }
@@ -354,7 +354,7 @@ impl Provider {
             }
             Provider::Claude => ".standard-markdown, .font-claude-response-body",
             Provider::Copilot => {
-                "[data-testid*=\"message-content\"], .markdown, .ac-textBlock, [class*=\"markdown\"]"
+                "[data-testid*=\"message-content\"], .markdown, .ac-textBlock, [class*=\"markdown\"], [class*=\"MessageContent\"], [class*=\"ResponseContent\"], [class*=\"ResponseRenderer\"]"
             }
         }
     }
@@ -415,11 +415,15 @@ impl Provider {
             }
             Provider::Copilot => {
                 r#"[
+                    "button[class*=\"SendButton\"][type=\"submit\"]",
+                    "button[type=\"submit\"][aria-label]",
                     "button[data-testid*=\"submit\"]",
                     "button[data-testid*=\"send\"]",
                     "button[aria-label=\"Send\"]",
                     "button[aria-label=\"Submit\"]",
-                    "button[aria-label*=\"Send message\"]"
+                    "button[aria-label*=\"Send message\"]",
+                    "button[aria-label*=\"傳送\"]",
+                    "button[aria-label*=\"发送\"]"
                 ]"#
             }
         }
@@ -451,9 +455,16 @@ impl Provider {
             Provider::Copilot => {
                 r#"[
                     "button[data-testid*=\"stop\"]",
+                    "button[class*=\"SendButton\"][aria-label*=\"Stop\"]",
+                    "button[class*=\"SendButton\"][aria-label*=\"停止\"]",
+                    "button[type=\"submit\"][aria-label*=\"Stop\"]",
+                    "button[type=\"submit\"][aria-label*=\"停止\"]",
                     "button[aria-label*=\"Stop generating\"]",
                     "button[aria-label*=\"Stop responding\"]",
-                    "button[aria-label=\"Stop\"]"
+                    "button[aria-label=\"Stop\"]",
+                    "button[aria-label*=\"停止產生\"]",
+                    "button[aria-label*=\"停止回覆\"]",
+                    "button[aria-label*=\"停止回應\"]"
                 ]"#
             }
         }
@@ -2597,6 +2608,31 @@ mod tests {
     }
 
     #[test]
+    fn copilot_selectors_match_current_localized_m365_controls() {
+        let send_selectors: Vec<String> =
+            serde_json::from_str(Provider::Copilot.send_button_selectors_json()).unwrap();
+        assert!(send_selectors.contains(&"button[type=\"submit\"][aria-label]".to_string()));
+        assert!(
+            send_selectors
+                .iter()
+                .any(|selector| selector.contains("SendButton"))
+        );
+        assert!(
+            send_selectors
+                .iter()
+                .any(|selector| selector.contains("傳送"))
+        );
+
+        let stop_selectors: Vec<String> =
+            serde_json::from_str(Provider::Copilot.stop_button_selectors_json()).unwrap();
+        assert!(
+            stop_selectors
+                .iter()
+                .any(|selector| selector.contains("停止"))
+        );
+    }
+
+    #[test]
     fn rejects_copilot_attachments() {
         let cli = Cli::try_parse_from([
             "ask-bridge",
@@ -3558,7 +3594,37 @@ fn scrape_latest_markdown_from_dom(
         const contentSelector = __CONTENT_SELECTOR__;
         const messages = Array.from(document.querySelectorAll(latestSelector))
             .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
-        const latest = messages[messages.length - 1];
+        let latest = messages[messages.length - 1];
+        if (!latest) {
+            const labelOf = (el) => [
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+                el.getAttribute('data-testid'),
+                el.textContent
+            ].filter(Boolean).join(' ');
+            const copyButtons = Array.from(document.querySelectorAll('button'))
+                .filter((button) => {
+                    const label = labelOf(button);
+                    return /copy|複製|复制|コピー|복사/i.test(label) &&
+                        !/code|程式碼|代码|table|表格/i.test(label) &&
+                        !button.closest('pre, code, [class*=\"code\"], [data-testid*=\"code\"]');
+                });
+
+            for (const button of copyButtons.reverse()) {
+                let candidate = button.parentElement;
+                while (candidate && candidate !== document.body && candidate !== document.documentElement) {
+                    const clone = candidate.cloneNode(true);
+                    clone.querySelectorAll('button, style, script, svg').forEach((el) => el.remove());
+                    const text = (clone.innerText || clone.textContent || '').trim();
+                    if (text.length > 1) {
+                        latest = candidate;
+                        break;
+                    }
+                    candidate = candidate.parentElement;
+                }
+                if (latest) break;
+            }
+        }
         if (!latest) return 'No assistant message found';
         const turn = contentSelector ? (latest.querySelector(contentSelector) || latest) : latest;
         
@@ -4967,6 +5033,117 @@ fn submit_regular_prompt(
     wait_for_submit_status(config_path)
 }
 
+fn submit_copilot_prompt(config_path: &str, prompt: &str, verbose: bool) -> Result<String, String> {
+    if verbose {
+        println!("Typing prompt through the Microsoft 365 Copilot composer...");
+    }
+
+    // Copilot's React composer handles trusted keyboard input reliably. Synthetic
+    // paste events can insert the prompt twice without updating the send-button
+    // state, so use the same browser typing path as the ChatGPT agent workflow.
+    focus_and_clear_composer(config_path, Provider::Copilot)?;
+    call_mcp_tool(
+        config_path,
+        "type_text",
+        serde_json::json!({
+            "text": prompt
+        }),
+    )?;
+
+    let click_send_js = r#"() => {
+            window.__submit_status = 'pending';
+            window.__ask_bridge_generation_seen = false;
+            (async () => {
+                try {
+                    const composerSelectors = __COMPOSER_SELECTORS__;
+                    const sendSelectors = __SEND_SELECTORS__;
+                    const composer = composerSelectors
+                        .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                        .find((el) => {
+                            const style = window.getComputedStyle(el);
+                            const rect = el.getBoundingClientRect();
+                            return style.display !== 'none' &&
+                                style.visibility !== 'hidden' &&
+                                style.opacity !== '0' &&
+                                rect.width > 0 && rect.height > 0;
+                        });
+                    if (!composer) {
+                        window.__submit_status = 'error: composer not found after typing';
+                        return;
+                    }
+
+                    const composerText = typeof composer.value !== 'undefined'
+                        ? composer.value
+                        : (composer.innerText || composer.textContent || '');
+                    if (!composerText.trim()) {
+                        window.__submit_status = 'error: Copilot composer remained empty after typing';
+                        return;
+                    }
+
+                    const isClickable = (el) => {
+                        if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+                        const style = window.getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const findSendButton = () => {
+                        const seen = new Set();
+                        for (const selector of sendSelectors) {
+                            for (const button of document.querySelectorAll(selector)) {
+                                if (seen.has(button)) continue;
+                                seen.add(button);
+                                if (isClickable(button)) return button;
+                            }
+                        }
+                        return null;
+                    };
+
+                    for (let i = 0; i < 150; i++) {
+                        const button = findSendButton();
+                        if (button) {
+                            button.click();
+                            window.__submit_status = 'success:' + JSON.stringify({
+                                clicked: true,
+                                buttonLabel: button.getAttribute('aria-label'),
+                                buttonType: button.getAttribute('type')
+                            });
+                            return;
+                        }
+                        await new Promise((resolve) => setTimeout(resolve, 100));
+                    }
+
+                    window.__submit_status = 'error: Copilot send button did not become active/enabled';
+                } catch (e) {
+                    window.__submit_status = 'error: ' + e.message;
+                }
+            })();
+            return true;
+        }"#
+    .replace(
+        "__COMPOSER_SELECTORS__",
+        Provider::Copilot.composer_selectors_json(),
+    )
+    .replace(
+        "__SEND_SELECTORS__",
+        Provider::Copilot.send_button_selectors_json(),
+    );
+
+    let start_res = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({
+            "function": click_send_js
+        }),
+    )?;
+    let start_parsed = parse_script_result(&start_res)?;
+    if !start_parsed.as_bool().unwrap_or(false) {
+        return Err("Failed to initiate Copilot prompt submission script".to_string());
+    }
+
+    wait_for_submit_status(config_path)
+}
+
 fn submit_chatgpt_agent_prompt(
     config_path: &str,
     parts: &ChatGptAgentPrompt<'_>,
@@ -5138,6 +5315,10 @@ fn submit_prompt_to_provider(
         && let Some(parts) = parse_chatgpt_agent_prompt(prompt)
     {
         return submit_chatgpt_agent_prompt(config_path, &parts, verbose);
+    }
+
+    if provider == Provider::Copilot {
+        return submit_copilot_prompt(config_path, prompt, verbose);
     }
 
     submit_regular_prompt(config_path, provider, prompt)
@@ -6022,17 +6203,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Get initial number of assistant messages before submitting the prompt
+    // Get the initial response marker count before submitting the prompt. Copilot's
+    // generated class names are unstable, so its localized response Copy actions
+    // provide a more durable completion marker than a single message selector.
     let assistant_selector = serde_json::to_string(provider.assistant_selector())
         .map_err(|e| format!("Failed to serialize assistant selector: {}", e))?;
+    let initial_count_js = r#"() => {
+            if (!__IS_COPILOT__) {
+                return document.querySelectorAll(__ASSISTANT_SELECTOR__).length;
+            }
+            const labelOf = (el) => [
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+                el.getAttribute('data-testid'),
+                el.textContent
+            ].filter(Boolean).join(' ');
+            return Array.from(document.querySelectorAll('button'))
+                .filter((button) => {
+                    const label = labelOf(button);
+                    return /copy|複製|复制|コピー|복사/i.test(label) &&
+                        !/code|程式碼|代码|table|表格/i.test(label) &&
+                        !button.closest('pre, code, [class*=\"code\"], [data-testid*=\"code\"]');
+                }).length;
+        }"#
+    .replace(
+        "__IS_COPILOT__",
+        if provider == Provider::Copilot {
+            "true"
+        } else {
+            "false"
+        },
+    )
+    .replace("__ASSISTANT_SELECTOR__", &assistant_selector);
     let count_res = call_mcp_tool(
         &config_path,
         "evaluate_script",
         serde_json::json!({
-            "function": format!("() => document.querySelectorAll({}).length", assistant_selector)
+            "function": initial_count_js
         }),
     )?;
-    let initial_assistant_count = parse_script_result(&count_res)
+    let initial_response_count = parse_script_result(&count_res)
         .ok()
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
@@ -6088,10 +6298,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
                     const stopButton = stopSelectors.map((selector) => document.querySelector(selector)).find(isVisible);
                     const messages = document.querySelectorAll(__ASSISTANT_SELECTOR__);
-                    const isNew = messages.length > __INITIAL_COUNT__;
+                    const assistantIsNew = messages.length > __INITIAL_COUNT__;
+                    const labelOf = (el) => [
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('title'),
+                        el.getAttribute('data-testid'),
+                        el.textContent
+                    ].filter(Boolean).join(' ');
+                    const copilotResponseCount = Array.from(document.querySelectorAll('button'))
+                        .filter((button) => {
+                            const label = labelOf(button);
+                            return /copy|複製|复制|コピー|복사/i.test(label) &&
+                                !/code|程式碼|代码|table|表格/i.test(label) &&
+                                !button.closest('pre, code, [class*=\"code\"], [data-testid*=\"code\"]');
+                        }).length;
+                    const copilotResponseIsNew = copilotResponseCount > __INITIAL_COUNT__;
+                    const isNew = __IS_COPILOT__ ? copilotResponseIsNew : assistantIsNew;
                     
                     if (isVisible(stopButton)) {
+                        if (__IS_COPILOT__) window.__ask_bridge_generation_seen = true;
                         return { status: "generating", isNew: isNew };
+                    }
+
+                    if (__IS_COPILOT__ && window.__ask_bridge_generation_seen) {
+                        return { status: "done", isNew: true };
                     }
                     
                     if (isNew) {
@@ -6102,7 +6332,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }"#
             .replace("__STOP_SELECTORS__", stop_selectors)
             .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
-            .replace("__INITIAL_COUNT__", &initial_assistant_count.to_string());
+            .replace("__INITIAL_COUNT__", &initial_response_count.to_string())
+            .replace(
+                "__IS_COPILOT__",
+                if provider == Provider::Copilot {
+                    "true"
+                } else {
+                    "false"
+                },
+            );
             let check_res = match call_mcp_tool(
                 &config_path,
                 "evaluate_script",
