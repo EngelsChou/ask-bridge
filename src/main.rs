@@ -328,7 +328,7 @@ impl Provider {
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
             Provider::Copilot => {
-                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], [class*=\"CopilotMessage\"]"
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], .fai-CopilotMessage"
             }
         }
     }
@@ -341,7 +341,7 @@ impl Provider {
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
             Provider::Copilot => {
-                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], [class*=\"CopilotMessage\"]"
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], .fai-CopilotMessage"
             }
         }
     }
@@ -354,7 +354,7 @@ impl Provider {
             }
             Provider::Claude => ".standard-markdown, .font-claude-response-body",
             Provider::Copilot => {
-                "[data-testid*=\"message-content\"], .markdown, .ac-textBlock, [class*=\"markdown\"], [class*=\"MessageContent\"], [class*=\"ResponseContent\"], [class*=\"ResponseRenderer\"]"
+                ".fai-CopilotMessage__content, [data-testid*=\"message-content\"], .markdown, .ac-textBlock, [class*=\"markdown\"], [class*=\"MessageContent\"], [class*=\"ResponseContent\"], [class*=\"ResponseRenderer\"]"
             }
         }
     }
@@ -2630,6 +2630,10 @@ mod tests {
                 .iter()
                 .any(|selector| selector.contains("停止"))
         );
+
+        let response_selector = Provider::Copilot.latest_response_selector();
+        assert!(response_selector.contains(".fai-CopilotMessage"));
+        assert!(!response_selector.contains("[class*=\"CopilotMessage\"]"));
     }
 
     #[test]
@@ -3592,8 +3596,15 @@ fn scrape_latest_markdown_from_dom(
     let inspect_js = r#"() => {
         const latestSelector = __LATEST_SELECTOR__;
         const contentSelector = __CONTENT_SELECTOR__;
+        const isActionToolbar = (el) => {
+            if (!el) return false;
+            const classText = Array.from(el.classList || []).join(' ');
+            return el.getAttribute('role') === 'toolbar' ||
+                /(?:^|\s)fai-CopilotMessage__actions(?:\s|$)/.test(classText);
+        };
         const messages = Array.from(document.querySelectorAll(latestSelector))
-            .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
+            .filter((el) => !isActionToolbar(el) &&
+                ((el.innerText || el.textContent || '').trim().length > 0));
         let latest = messages[messages.length - 1];
         if (!latest) {
             const labelOf = (el) => [
@@ -3616,7 +3627,7 @@ fn scrape_latest_markdown_from_dom(
                     const clone = candidate.cloneNode(true);
                     clone.querySelectorAll('button, style, script, svg').forEach((el) => el.remove());
                     const text = (clone.innerText || clone.textContent || '').trim();
-                    if (text.length > 1) {
+                    if (!isActionToolbar(candidate) && text.length > 1) {
                         latest = candidate;
                         break;
                     }
@@ -3639,10 +3650,13 @@ fn scrape_latest_markdown_from_dom(
                 if (node.nodeType !== Node.ELEMENT_NODE) return;
 
                 const tag = node.tagName.toLowerCase();
-                
+
                 const classText = Array.from(node.classList || []).join(' ');
+                const role = node.getAttribute('role');
                 if (node.classList.contains('sr-only') ||
                     /screen-reader|visually-hidden|cdk-visually-hidden/.test(classText) ||
+                    role === 'toolbar' ||
+                    /(?:^|\s)fai-CopilotMessage__actions(?:\s|$)/.test(classText) ||
                     tag === 'button' || tag === 'style' || tag === 'script') {
                     return;
                 }
