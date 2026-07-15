@@ -37,7 +37,7 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 - **🌀 TUI Thinking Animation**: Displays a rotating spinner while waiting for the provider to reply, then clears it once output starts.
 - **🧠 Intelligent Tab Management**: Reuses existing provider tabs if open, focuses them, or opens new ones, avoiding tab clutter.
 - **🖥️ Pipe & Stdin Support**: Supports piping prompts via `stdin` (e.g. `cat report.txt | ask-bridge "summarize this"`).
-- **📎 Image & File Attachments**: Attach local images with `--image` (supported on ChatGPT and Claude), or documents (PDF, Word, Excel, plain text, Markdown, JSON, etc.) with `--file`; Gemini currently supports `--file` and rejects `--image`.
+- **📎 Image & File Attachments**: Attach local images with `--image` (supported on ChatGPT, Claude, and Microsoft 365 Copilot), or documents (PDF, Word, Excel, plain text, Markdown, JSON, source code, etc.) with `--file`; Gemini currently supports `--file` and rejects `--image`.
 - **🔀 Model Switching**: Use `--model` to switch the provider model before the prompt is sent, such as ChatGPT `GPT-5.4`, Gemini `3.5 Flash`, or Claude `Sonnet`.
 - **Response Timeout**: Use `--timeout <seconds>` to control how long to wait for a provider response, defaulting to `300` seconds.
 - **🔍 Quiet by Default & Verbose Mode**: Quiet and clean output by default (displaying only the generated response), with an optional `--verbose` flag to display full browser state logs if needed.
@@ -49,7 +49,7 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 
 To run this tool, you need:
 
-1. **Node.js 20.19.0 LTS or newer LTS**, with both `node` and `npx` available in the current shell's `PATH`. `ask-bridge` starts `chrome-devtools-mcp@latest` through `npx`; older Node.js versions, such as `v20.11.0`, can cause the MCP server to exit during `initialize`.
+1. **Node.js 20.19.0 LTS or newer LTS**, with both `node` and `npx` available in the current shell's `PATH`. `ask-bridge` starts the pinned `chrome-devtools-mcp@1.5.0` through `npx`; older Node.js versions, such as `v20.11.0`, can cause the MCP server to exit during `initialize`.
 2. **Google Chrome** installed (normally located at `/Applications/Google Chrome.app` on macOS). `make install` installs it with Homebrew when it is missing and Homebrew is available.
 
 Check the Node.js version visible to your current shell:
@@ -78,13 +78,13 @@ If you only want to use the pre-compiled Release version (without installing the
 #### macOS / Linux
 Open your terminal and run:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash
 ```
 
 #### Windows
 Open PowerShell (recommended to Run as Administrator) and run:
 ```powershell
-irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex
 ```
 
 > [!NOTE]
@@ -118,13 +118,13 @@ This repository provides an `ask-bridge` Agent Skill so Skills-compatible Coding
 Install it with `npx skills`; you do not need to copy the `skills/` directory manually:
 
 ```bash
-npx skills add doggy8088/ask-bridge --skill ask-bridge
+npx skills add EngelsChou/ask-bridge --skill ask-bridge
 ```
 
 To install it globally for Codex, specify the agent and global scope:
 
 ```bash
-npx skills add doggy8088/ask-bridge --skill ask-bridge --agent codex --global
+npx skills add EngelsChou/ask-bridge --skill ask-bridge --agent codex --global
 ```
 
 ---
@@ -285,31 +285,38 @@ Instead of piping file contents into the prompt, you can upload local files as a
 
 #### Attach images
 
-Use `--image` (repeatable) to attach one or more local images. This currently supports ChatGPT and Claude; Gemini image input is not enabled and exits with an explicit error when used with `--provider gemini`.
+Use `--image` (repeatable) to attach one or more local images. This supports ChatGPT, Claude, and Microsoft 365 Copilot; Gemini image input is not enabled and exits with an explicit error when used with `--provider gemini`.
 
 ```bash
 ask-bridge "Describe this image." --image screenshot.png
 ask-bridge "Compare these two images." --image v1.png --image v2.png
 ask-bridge --provider claude "Describe this image." --image screenshot.png
+ask-bridge --provider copilot "Analyze this UI problem from the screenshot." --image screenshot.png
 ```
 
-Supported formats include PNG, JPEG, GIF, WebP, SVG, BMP, and more.
+Image formats vary by provider. According to Microsoft's [supported file formats documentation](https://support.microsoft.com/en-us/microsoft-365-copilot/file-formats-supported-by-microsoft-365-copilot), Microsoft 365 Copilot officially supports PNG, JPEG/JPG, GIF, BMP, and TIFF; do not treat WebP or SVG as officially supported Copilot formats. Additional formats accepted by ChatGPT or Claude remain subject to each provider's current web UI restrictions.
 
 #### Attach documents
 
-Use `--file` (repeatable) to attach documents such as PDF, Word, Excel, PowerPoint, plain text, Markdown, CSV, JSON, or source code. This flow supports ChatGPT, Gemini, and Claude.
+Use `--file` (repeatable) to attach documents such as PDF, Word, Excel, PowerPoint, plain text, Markdown, CSV, JSON, or source code. This flow supports ChatGPT, Gemini, Claude, and Microsoft 365 Copilot.
 
 ```bash
 ask-bridge "Summarize this PDF." --file report.pdf
 ask-bridge "How many rows are in this CSV?" --file data.csv
 ask-bridge "Check this code for issues." --file src/main.rs
+ask-bridge --provider copilot "Review this source file and suggest changes." --file src/main.rs
 ```
 
 You can attach images and documents at the same time:
 
 ```bash
 ask-bridge "Compare this design image against the spec document and list inconsistencies." --image design.png --file spec.docx
+ask-bridge --provider copilot "Analyze the problem using both the screenshot and source file." --image screen.png --file src/main.rs
 ```
+
+For Microsoft 365 Copilot, `ask-bridge` uses the web UI's **Add content → Upload images and files** flow described in Microsoft's [Add content to Copilot Chat prompts](https://support.microsoft.com/en-us/microsoft-365-copilot/add-content-to-microsoft-365-copilot-chat-prompts) guidance. Availability still depends on the organization's Copilot license, supported file formats, and IT policy. If local uploads are disabled, `ask-bridge` stops before submitting the prompt and reports the upload error instead of claiming success.
+
+To prevent an attachment left by an earlier request from being transmitted without authorization for the current request, the Copilot composer must start without an existing attachment chip. If `ask-bridge` detects a stale attachment, an upload in progress, or a different attachment count at the instant of submission, it fails closed without sending the prompt. Remove the attachment manually in Chrome or start a new conversation and retry; `ask-bridge` does not delete user attachments automatically.
 
 ### 9. Switch Model
 
@@ -360,7 +367,7 @@ ask-bridge close
 ## ⚙️ How It Works (Under the Hood)
 
 1. **Browser Initialization**: `ask-bridge` checks if Chrome is listening on debugging port `9223`. If not, it spawns Google Chrome as a background process with a custom profile directory (`~/.config/ask-bridge/chrome-profile`).
-2. **MCP Bridge Config**: On startup, it automatically writes a custom `mcp_servers.json` to `~/.config/ask-bridge/mcp_servers.json`, configuring the Chrome DevTools MCP server by default with `chrome-devtools-mcp@latest` and `--browser-url=http://127.0.0.1:9223`.
+2. **MCP Bridge Config**: On startup, it automatically writes a custom `mcp_servers.json` to `~/.config/ask-bridge/mcp_servers.json`, configuring the Chrome DevTools MCP server by default with the pinned `chrome-devtools-mcp@1.5.0` and `--browser-url=http://127.0.0.1:9223`.
 3. **Client Call**: `ask-bridge` calls the embedded `doggy8088/mcp-cli` Rust library dependency, invoking `list_pages`, `select_page`, `type_text`, and `evaluate_script` tools to automate the DOM without relying on an external `mcp-cli` executable.
 4. **State Polling**: During generation, a lightweight JavaScript engine checks the provider's send/stop button states and extracts response element inner-text for terminal output.
 

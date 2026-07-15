@@ -72,7 +72,7 @@
           <svg class="ico ico--moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13.5A8 8 0 0 1 10.5 4a8 8 0 1 0 9.5 9.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>
         </button>
 
-        <a class="nav__cta" href="https://github.com/doggy8088/ask-bridge" target="_blank" rel="noopener" aria-label="GitHub">
+        <a class="nav__cta" href="https://github.com/EngelsChou/ask-bridge" target="_blank" rel="noopener" aria-label="GitHub">
           <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 2C6.5 2 2 6.6 2 12.2c0 4.5 2.9 8.3 6.8 9.6.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.300-4.5-1.1-4.5-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.3 4.7-4.5 5 .4.3.7.9.7 1.9v2.8c0 .3.2.6.7.5A10.2 10.2 0 0 0 22 12.2C22 6.6 17.5 2 12 2Z"/></svg>
           <span>GitHub</span>
         </a>
@@ -97,11 +97,11 @@
 
           <div class="hero__cta">
             <a class="btn btn--primary" href="#install" data-i18n="hero.ctaInstall">一鍵安裝</a>
-            <a class="btn btn--ghost" href="https://github.com/doggy8088/ask-bridge" target="_blank" rel="noopener" data-i18n="hero.ctaSource">查看原始碼</a>
+            <a class="btn btn--ghost" href="https://github.com/EngelsChou/ask-bridge" target="_blank" rel="noopener" data-i18n="hero.ctaSource">查看原始碼</a>
           </div>
 
           <div class="install-strip" data-copy>
-            <code id="heroCmd">curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash</code>
+            <code id="heroCmd">curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash</code>
             <button class="copy" data-copy-target="heroCmd" data-i18n-aria="nav.copy">
               <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
             </button>
@@ -280,7 +280,7 @@ ask-bridge --provider gemini "翻譯這段" --model "3.1 Pro"</code><button clas
 
       <div class="install__req">
         <h3 data-i18n="install.req.title">前置需求</h3>
-        <p data-i18n="install.req.lead">需要 Node.js 20.19.0 LTS 以上或更新的 LTS 版本，且 node 與 npx 必須可在目前 shell 的 PATH 中執行。ask-bridge 會透過 npx 啟動 chrome-devtools-mcp@latest；Node.js 版本過舊時，MCP server 可能在 initialize 階段直接退出。</p>
+        <p data-i18n="install.req.lead">需要 Node.js 20.19.0 LTS 以上或更新的 LTS 版本，且 node 與 npx 必須可在目前 shell 的 PATH 中執行。ask-bridge 會透過 npx 啟動版本固定的 chrome-devtools-mcp@1.5.0；Node.js 版本過舊時，MCP server 可能在 initialize 階段直接退出。</p>
         <pre class="code code--blk install__check" data-copy><code id="reqc">node -v
 npx -v</code><button class="copy" data-copy-target="reqc" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
         <div class="install__platforms">
@@ -308,17 +308,17 @@ npx -v</code><button class="copy" data-copy-target="reqc" data-i18n-aria="nav.co
         </div>
 
         <div class="tabs__panel tab--active" id="panel-mac" role="tabpanel" aria-labelledby="tab-mac" data-panel="mac">
-          <pre class="code code--blk" data-copy><code id="i1c">curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash</code><button class="copy" data-copy-target="i1c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
+          <pre class="code code--blk" data-copy><code id="i1c">curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash</code><button class="copy" data-copy-target="i1c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
         </div>
         <div class="tabs__panel" id="panel-win" role="tabpanel" aria-labelledby="tab-win" data-panel="win" hidden>
-          <pre class="code code--blk" data-copy><code id="i2c">irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | iex</code><button class="copy" data-copy-target="i2c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
+          <pre class="code code--blk" data-copy><code id="i2c">irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex</code><button class="copy" data-copy-target="i2c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
         </div>
         <div class="tabs__panel" id="panel-src" role="tabpanel" aria-labelledby="tab-src" data-panel="src" hidden>
-          <pre class="code code--blk" data-copy><code id="i3c">git clone https://github.com/doggy8088/ask-bridge.git
+          <pre class="code code--blk" data-copy><code id="i3c">git clone https://github.com/EngelsChou/ask-bridge.git
 cd ask-bridge && make install</code><button class="copy" data-copy-target="i3c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
         </div>
         <div class="tabs__panel" id="panel-skill" role="tabpanel" aria-labelledby="tab-skill" data-panel="skill" hidden>
-          <pre class="code code--blk" data-copy><code id="i4c">npx skills add doggy8088/ask-bridge --skill ask-bridge</code><button class="copy" data-copy-target="i4c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
+          <pre class="code code--blk" data-copy><code id="i4c">npx skills add EngelsChou/ask-bridge --skill ask-bridge</code><button class="copy" data-copy-target="i4c" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button></pre>
         </div>
       </div>
     </section>
@@ -336,7 +336,7 @@ cd ask-bridge && make install</code><button class="copy" data-copy-target="i3c" 
           <h2 data-i18n="cta.title">讓你的 Agent 多一條研究通路</h2>
           <p data-i18n="cta.sub">把探索性工作交給網站型 AI，把高價值額度留給真正改變專案的程式碼。</p>
           <div class="install-strip install-strip--light" data-copy>
-            <code id="ctaCmd">curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash</code>
+            <code id="ctaCmd">curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash</code>
             <button class="copy" data-copy-target="ctaCmd" data-i18n-aria="nav.copy"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M5 15V5.5A1.5 1.5 0 0 1 6.5 4H15" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
           </div>
         </div>
@@ -356,9 +356,9 @@ cd ask-bridge && make install</code><button class="copy" data-copy-target="i3c" 
       </div>
 
       <nav class="footer__links" aria-label="footer">
-        <a href="https://github.com/doggy8088/ask-bridge" target="_blank" rel="noopener" data-i18n="footer.github">GitHub</a>
-        <a href="https://github.com/doggy8088/ask-bridge/blob/main/README.md" target="_blank" rel="noopener" data-i18n="footer.docs">文件</a>
-        <a href="https://github.com/doggy8088/ask-bridge/issues" target="_blank" rel="noopener" data-i18n="footer.issues">問題回報</a>
+        <a href="https://github.com/EngelsChou/ask-bridge" target="_blank" rel="noopener" data-i18n="footer.github">GitHub</a>
+        <a href="https://github.com/EngelsChou/ask-bridge/blob/main/README.md" target="_blank" rel="noopener" data-i18n="footer.docs">文件</a>
+        <a href="https://github.com/EngelsChou/ask-bridge/issues" target="_blank" rel="noopener" data-i18n="footer.issues">問題回報</a>
         <a href="https://www.facebook.com/will.fans/" target="_blank" rel="noopener">Facebook</a>
       </nav>
 

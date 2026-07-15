@@ -36,7 +36,7 @@
 - **思考動畫**：等待 provider 回覆時，在終端機顯示旋轉 spinner，開始輸出內容後自動清除。
 - **智慧分頁管理**：可重用既有 provider 分頁、聚焦分頁，或開啟新分頁，避免分頁過度增加。
 - **Pipe 與 stdin 支援**：支援透過 standard input 傳入 prompt，例如 `cat report.txt | ask-bridge "summarize this"`。
-- **圖片與文件上傳**：可透過 `--image` 附上圖片（支援 ChatGPT 與 Claude），或透過 `--file` 附上文件（PDF、Word、Excel、純文字、Markdown、JSON 等皆可），一次可指定多個檔案；Gemini 目前支援 `--file`，不支援 `--image` 圖片輸入。
+- **圖片與文件上傳**：可透過 `--image` 附上圖片（支援 ChatGPT、Claude 與 Microsoft 365 Copilot），或透過 `--file` 附上文件（PDF、Word、Excel、純文字、Markdown、JSON、程式碼等），一次可指定多個檔案；Gemini 目前支援 `--file`，不支援 `--image` 圖片輸入。
 - **模型切換**：使用 `--model` 在送出 prompt 前自動切換 provider 模型（如 ChatGPT 的 `GPT-5.4`、`o3`，Gemini 的 `3.5 Flash`、`3.1 Pro`，或 Claude 的 `Sonnet`、`Opus`）。
 - **回應超時**：使用 `--timeout <秒數>` 設定等待回應上限，預設為 `300` 秒。
 - **預設安靜模式與 verbose 模式**：預設只輸出最終回覆；加上 `--verbose` 可顯示背景瀏覽器控制流程。
@@ -46,7 +46,7 @@
 
 執行此工具需要：
 
-1. 已安裝 **Node.js 20.19.0 LTS 以上，或更新的 LTS 版本**，並確保 `node` 與 `npx` 可在目前 shell 的 `PATH` 中執行。`ask-bridge` 會透過 `npx` 啟動 `chrome-devtools-mcp@latest`；若 Node.js 版本過舊，例如 `v20.11.0`，MCP server 會在 `initialize` 階段直接退出。
+1. 已安裝 **Node.js 20.19.0 LTS 以上，或更新的 LTS 版本**，並確保 `node` 與 `npx` 可在目前 shell 的 `PATH` 中執行。`ask-bridge` 會透過 `npx` 啟動版本固定的 `chrome-devtools-mcp@1.5.0`；若 Node.js 版本過舊，例如 `v20.11.0`，MCP server 會在 `initialize` 階段直接退出。
 2. 已安裝 Google Chrome。macOS 預設路徑通常是 `/Applications/Google Chrome.app`。若缺少 Chrome，且系統有 Homebrew，`make install` 會自動安裝。
 
 可用以下命令確認目前 shell 看到的 Node.js 版本：
@@ -73,13 +73,13 @@ npx -v
 #### macOS / Linux
 請開啟終端機執行：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash
 ```
 
 #### Windows
 請開啟 PowerShell (建議以系統管理員身分) 執行：
 ```powershell
-irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex
 ```
 
 若公司網路不允許 `npm install` 或安裝時連線 GitHub，可改用 Release 附件中的 `install.exe` 進行完全離線的使用者層級安裝，不需要系統管理員權限。此檔案已內嵌 `ask-bridge.exe`、`ask.exe`、更新輔助程式及 `uninstall.exe`，安裝過程不會執行 npm，也不會下載任何內容。Node.js、npx、`chrome-devtools-mcp@1.5.0` 與 Google Chrome 屬於執行環境前置需求；若公司電腦已經安裝或快取，安裝程式會直接沿用。
@@ -102,7 +102,7 @@ Windows SmartScreen 顯示的發行者來自 Authenticode 數位簽章。若要�
 .\scripts\build-windows-installers.ps1 -CertificatePath "C:\secure\engels-chou-code-signing.pfx" -CertificatePassword "<password>" -RequireSignature
 ```
 
-CI 可使用 `ASK_BRIDGE_SIGNING_CERTIFICATE_THUMBPRINT`、`ASK_BRIDGE_SIGNING_CERTIFICATE_PATH` 與 `ASK_BRIDGE_SIGNING_CERTIFICATE_PASSWORD`。未提供憑證時仍能離線封裝，但產物不會有受信任的發行者身分。
+GitHub hosted runner 不會自帶 Engels Chou 的程式碼簽章憑證，因此 CI 預設產生未簽署檔案。Release workflow 支援 repository secrets `WINDOWS_SIGNING_CERTIFICATE_BASE64`（PFX 的 base64）與 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`；前者存在時會把 PFX 寫入 runner 暫存目錄並以 `-RequireSignature` 建置，簽章失敗即停止發行，最後再刪除暫存 PFX。憑證必須由 Windows 信任且主體為 Engels Chou；未設定 secrets 時仍能離線封裝，但產物不會有受信任的發行者身分。
 
 > [!NOTE]
 > 請確保安裝路徑（macOS/Linux 為 `~/.local/bin`；Windows 為 `$HOME\.local\bin`）已加入您的系統 `PATH` 環境變數中。
@@ -135,13 +135,13 @@ cargo build --release
 請使用 `npx skills` 安裝，不需要手動複製 `skills/` 目錄：
 
 ```bash
-npx skills add doggy8088/ask-bridge --skill ask-bridge
+npx skills add EngelsChou/ask-bridge --skill ask-bridge
 ```
 
 若要安裝到 Codex 的全域 Skills 目錄，可指定 agent 與 global scope：
 
 ```bash
-npx skills add doggy8088/ask-bridge --skill ask-bridge --agent codex --global
+npx skills add EngelsChou/ask-bridge --skill ask-bridge --agent codex --global
 ```
 
 ## 使用方式
@@ -306,31 +306,38 @@ cat src/main.rs | ask-bridge "這段 Rust code 有記憶體洩漏風險嗎？"
 
 #### 附上圖片
 
-使用 `--image` 附上一或多張本機圖片（可重複指定）。此功能目前支援 ChatGPT 與 Claude；Gemini 圖片輸入尚未支援，搭配 `--provider gemini` 使用會立即回報錯誤。
+使用 `--image` 附上一或多張本機圖片（可重複指定）。此功能支援 ChatGPT、Claude 與 Microsoft 365 Copilot；Gemini 圖片輸入尚未支援，搭配 `--provider gemini` 使用會立即回報錯誤。
 
 ```bash
 ask-bridge "請描述這張圖片的內容。" --image screenshot.png
 ask-bridge "比較這兩張圖的差異。" --image v1.png --image v2.png
 ask-bridge --provider claude "請描述這張圖片的內容。" --image screenshot.png
+ask-bridge --provider copilot "請根據截圖分析這個 UI 問題。" --image screenshot.png
 ```
 
-支援的格式包含 PNG、JPEG、GIF、WebP、SVG、BMP 等。
+各 provider 接受的圖片格式不同。Microsoft 365 Copilot 依[官方支援格式文件](https://support.microsoft.com/en-us/microsoft-365-copilot/file-formats-supported-by-microsoft-365-copilot)宣告支援 PNG、JPEG／JPG、GIF、BMP 與 TIFF；不要把 WebP 或 SVG 視為 Copilot 的官方支援格式。ChatGPT 與 Claude 可接受的其他格式仍以各 provider 當下的網頁限制為準。
 
 #### 附上文件
 
-使用 `--file` 附上一或多份本機文件（可重複指定），例如 PDF、Word、Excel、PowerPoint、純文字、Markdown、CSV、JSON、程式碼等。ChatGPT、Gemini 與 Claude 都支援此流程。
+使用 `--file` 附上一或多份本機文件（可重複指定），例如 PDF、Word、Excel、PowerPoint、純文字、Markdown、CSV、JSON、程式碼等。ChatGPT、Gemini、Claude 與 Microsoft 365 Copilot 都支援此流程。
 
 ```bash
 ask-bridge "請摘要這份 PDF 的重點。" --file report.pdf
 ask-bridge "這份 CSV 總共有幾筆資料？" --file data.csv
 ask-bridge "幫我檢查這段程式碼有沒有問題。" --file src/main.rs
+ask-bridge --provider copilot "請檢視這份程式碼並提出修改建議。" --file src/main.rs
 ```
 
 也可以同時附上圖片與文件：
 
 ```bash
 ask-bridge "請對照這張設計圖與規格文件，指出不一致的地方。" --image design.png --file spec.docx
+ask-bridge --provider copilot "請結合畫面與程式碼分析問題。" --image screen.png --file src/main.rs
 ```
+
+Microsoft 365 Copilot 會透過網頁中的「新增內容」→「上傳圖片和檔案」流程上傳本機附件；操作方式可參考 Microsoft 的[在 Copilot Chat 提示中新增內容](https://support.microsoft.com/en-us/microsoft-365-copilot/add-content-to-microsoft-365-copilot-chat-prompts)說明。此選項是否出現仍取決於公司租戶的 Copilot 授權、檔案格式與 IT 管理原則；若被停用，`ask-bridge` 會在送出 prompt 前回報明確錯誤，不會假裝附件已上傳成功。
+
+為避免把上一次留下、未經本次授權的附件一起送出，Copilot composer 在請求開始時必須沒有既有 attachment chip。若偵測到舊附件、上傳仍在進行，或送出瞬間的附件數量與本次請求不一致，`ask-bridge` 會 fail closed 並停止送出；請在 Chrome 手動移除附件或開啟新對話後再重試，程式不會自行刪除使用者的附件。
 
 #### 顯示上傳結果
 
@@ -393,7 +400,7 @@ ask-bridge update
 ## 運作原理
 
 1. **瀏覽器初始化**：`ask-bridge` 會檢查 Chrome 是否正在監聽 debug port `9223`。若沒有，會以專屬 profile 目錄 `~/.config/ask-bridge/chrome-profile` 啟動 Google Chrome。
-2. **MCP Bridge 設定**：啟動時會自動寫入 `~/.config/ask-bridge/mcp_servers.json`，預設設定 Chrome DevTools MCP server，使用 `chrome-devtools-mcp@latest` 與 `--browser-url=http://127.0.0.1:9223`。
+2. **MCP Bridge 設定**：啟動時會自動寫入 `~/.config/ask-bridge/mcp_servers.json`，預設設定 Chrome DevTools MCP server，使用版本固定的 `chrome-devtools-mcp@1.5.0` 與 `--browser-url=http://127.0.0.1:9223`。
 3. **Client 呼叫**：`ask-bridge` 透過內建的 `doggy8088/mcp-cli` Rust library dependency 呼叫 MCP tools，例如 `list_pages`、`select_page`、`type_text` 與 `evaluate_script`，不依賴系統上的外部 `mcp-cli` 命令。
 4. **狀態輪詢**：provider 產生回覆期間，工具會以 JavaScript 檢查送出與停止按鈕狀態，擷取回覆元素的文字內容，並輸出到 `stdout`。
 

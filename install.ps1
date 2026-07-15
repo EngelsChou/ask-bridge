@@ -154,7 +154,7 @@ $nodeVersionSupported = `
     ($nodeMajor -ge 23)
 
 if (-not $nodeVersionSupported) {
-    Write-Error "Node.js $nodeVersionText is not supported by chrome-devtools-mcp@latest. Supported versions are ^20.19.0, ^22.12.0, or >=23.0.0. Install a current Node.js LTS release, reopen PowerShell, and retry."
+    Write-Error "Node.js $nodeVersionText is not supported by chrome-devtools-mcp@1.5.0. Supported versions are ^20.19.0, ^22.12.0, or >=23.0.0. Install a current Node.js LTS release, reopen PowerShell, and retry."
     exit 1
 }
 
@@ -266,8 +266,8 @@ if ($Local) {
 }
 
 # 3. Target configuration
-$Version = "0.2.9"
-$RepoOwner = "doggy8088"
+$Version = "0.3.0"
+$RepoOwner = "EngelsChou"
 $RepoName = "ask-bridge"
 $ArtifactName = "ask-bridge-x86_64-pc-windows-msvc.zip"
 $ReleaseUrl = "https://github.com/$RepoOwner/$RepoName/releases/download/v$Version/$ArtifactName"

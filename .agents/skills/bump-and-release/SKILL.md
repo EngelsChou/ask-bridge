@@ -101,7 +101,7 @@ git push origin main
 
 #### CI 品質閘門範例：
 ```bash
-repo="doggy8088/ask-bridge"
+repo="EngelsChou/ask-bridge"
 
 # 先確認 main push 已更新到待發布 commit
 git fetch origin main --quiet
@@ -188,7 +188,7 @@ git push origin "refs/tags/$tag"
 GitHub Release 建立完成後，必須立即補上繁體中文（zh-tw）發行說明。不要只保留 GitHub 自動產生的 `Full Changelog` 連結。
 
 #### 資料蒐集
-1. 使用 `gh release view vX.Y.Z --repo doggy8088/ask-bridge --json tagName,body,url,publishedAt` 確認 release 已建立。
+1. 使用 `gh release view vX.Y.Z --repo EngelsChou/ask-bridge --json tagName,body,url,publishedAt` 確認 release 已建立。
 2. 使用 `git log --reverse --pretty=format:'%h%x09%ad%x09%s' --date=short <previous-tag>..vX.Y.Z` 查看此版本 commit。若是首版 release，前一個 tag 不存在，改用 `git log --reverse --pretty=format:'%h%x09%ad%x09%s' --date=short vX.Y.Z`。
 3. 使用 `git diff --stat <previous-tag>..vX.Y.Z` 與必要的 `git diff <previous-tag>..vX.Y.Z -- <path>` 確認實際影響範圍。若是首版 release，改用：
    - `git diff --stat --root vX.Y.Z`
@@ -225,13 +225,13 @@ GitHub Release 建立完成後，必須立即補上繁體中文（zh-tw）發行
 
 ## 相關連結
 
-- 完整變更紀錄: https://github.com/doggy8088/ask-bridge/compare/<previous-tag>...vX.Y.Z
+- 完整變更紀錄: https://github.com/EngelsChou/ask-bridge/compare/<previous-tag>...vX.Y.Z
 ```
 
 首版 release 的完整變更紀錄連結可使用：
 
 ```markdown
-- 完整變更紀錄: https://github.com/doggy8088/ask-bridge/commits/vX.Y.Z
+- 完整變更紀錄: https://github.com/EngelsChou/ask-bridge/commits/vX.Y.Z
 ```
 
 #### 寫入 GitHub Release
@@ -246,11 +246,11 @@ cat > "$release_notes_file" <<'EOF'
 
 ## 相關連結
 
-- 完整變更紀錄: https://github.com/doggy8088/ask-bridge/compare/<previous-tag>...vX.Y.Z
+- 完整變更紀錄: https://github.com/EngelsChou/ask-bridge/compare/<previous-tag>...vX.Y.Z
 EOF
 
-gh release edit vX.Y.Z --repo doggy8088/ask-bridge --notes-file "$release_notes_file"
-gh release view vX.Y.Z --repo doggy8088/ask-bridge --json tagName,body,url
+gh release edit vX.Y.Z --repo EngelsChou/ask-bridge --notes-file "$release_notes_file"
+gh release view vX.Y.Z --repo EngelsChou/ask-bridge --json tagName,body,url
 ```
 
 > [!IMPORTANT]

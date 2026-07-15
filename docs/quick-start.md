@@ -124,15 +124,16 @@ cat README.md | ask-bridge "摘要這份文件。"
 
 ## 附上圖片或文件
 
-`ask-bridge` 支援把本機檔案當作附件直接上傳給所選 provider，不必透過 pipe 把內容塞進 prompt。Gemini 目前支援 `--file` 文件附件；`--image` 圖片輸入目前支援 ChatGPT 與 Claude。
+`ask-bridge` 支援把本機檔案當作附件直接上傳給所選 provider，不必透過 pipe 把內容塞進 prompt。Gemini 目前支援 `--file` 文件附件；`--image` 圖片輸入支援 ChatGPT、Claude 與 Microsoft 365 Copilot。
 
 ### 附上圖片
 
-使用 `--image`（可重複指定）。此功能目前支援 ChatGPT 與 Claude；搭配 `--provider gemini` 使用會立即回報錯誤。
+使用 `--image`（可重複指定）。此功能支援 ChatGPT、Claude 與 Microsoft 365 Copilot；搭配 `--provider gemini` 使用會立即回報錯誤。
 
 ```sh
 ask-bridge "請描述這張圖片。" --image screenshot.png
 ask-bridge "比較這兩張圖。" --image v1.png --image v2.png
+ask-bridge --provider copilot "請根據截圖分析 UI 問題。" --image screenshot.png
 ```
 
 ### 附上文件
@@ -143,6 +144,7 @@ ask-bridge "比較這兩張圖。" --image v1.png --image v2.png
 ask-bridge "請摘要這份 PDF。" --file report.pdf
 ask-bridge "這份 CSV 有幾筆資料？" --file data.csv
 ask-bridge "幫我檢查這段程式碼。" --file src/main.rs
+ask-bridge --provider copilot "請檢視這份程式碼並提出修改建議。" --file src/main.rs
 ```
 
 也可以同時附上圖片與文件：
@@ -150,6 +152,8 @@ ask-bridge "幫我檢查這段程式碼。" --file src/main.rs
 ```sh
 ask-bridge "對照這張設計圖與規格文件，指出不一致處。" --image design.png --file spec.docx
 ```
+
+Microsoft 365 Copilot 使用網頁中的「新增內容」→「上傳圖片和檔案」流程。公司租戶若因授權或 IT 原則停用本機附件，命令會在送出 prompt 前回報錯誤。
 
 ## 切換模型
 
@@ -203,7 +207,7 @@ ask-bridge close
       "command": "npx",
       "args": [
         "-y",
-        "chrome-devtools-mcp@latest",
+        "chrome-devtools-mcp@1.5.0",
         "--browser-url=http://127.0.0.1:9223"
       ]
     }

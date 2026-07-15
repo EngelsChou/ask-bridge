@@ -169,8 +169,8 @@ prompt + "\n\n" + stdin
 | `--verbose` | 顯示瀏覽器自動化流程 | 用於診斷 provider UI、登入、上傳、模型切換或等待回覆問題 |
 | `-o`, `--output <FILE>` | 將最終 Markdown 回覆寫入檔案 | 同時仍會在終端機輸出渲染結果；適合保留研究紀錄 |
 | `-i`, `--image-output <IMAGE_PATH>` | 下載 provider 回覆中的生成圖片 | 可指定資料夾或檔案路徑；可搭配一般 prompt、`get` 或 `open <url>` |
-| `--image <IMAGE_FILE>` | 附加圖片檔，可重複指定 | 支援 ChatGPT 與 Claude；搭配 Gemini 會失敗 |
-| `--file <FILE>` | 附加文件檔，可重複指定 | 支援 PDF、Word、Excel、PowerPoint、純文字、Markdown、CSV、JSON、程式碼等；ChatGPT、Gemini 與 Claude 都可用 |
+| `--image <IMAGE_FILE>` | 附加圖片檔，可重複指定 | 支援 ChatGPT、Claude 與 Microsoft 365 Copilot；搭配 Gemini 會失敗 |
+| `--file <FILE>` | 附加文件檔，可重複指定 | 支援 PDF、Word、Excel、PowerPoint、純文字、Markdown、CSV、JSON、程式碼等；ChatGPT、Gemini、Claude 與 Microsoft 365 Copilot 都可用 |
 | `--model <MODEL>` | 送出 prompt 前切換模型 | 比對不分大小寫與標點；模型名稱取決於 provider UI 與帳號權限 |
 | `-h`, `--help` | 顯示 help | 可用 `ask-bridge --help` 或 `ask-bridge help <COMMAND>` |
 | `config` | 設定或顯示全域預設 provider | 使用 `ask-bridge config --provider <chatgpt|gemini|claude|copilot>` |
@@ -200,6 +200,7 @@ ask-bridge -p claude '請摘要這份文件。' --file notes.md
 - 使用 ChatGPT 作為未設定時的預設 provider。
 - 使用 Gemini 做替代觀點、快速摘要或使用者明確要求 Gemini 時。
 - 使用 Claude 做程式碼分析、長文摘要、替代觀點或使用者明確要求 Claude 時；Claude 也支援 `--image` 圖片輸入。
+- 使用 Microsoft 365 Copilot 處理公司工作內容、程式碼、規格文件或截圖時，可搭配 `--file`／`--image`；本機上傳功能仍受公司租戶授權與 IT 原則控制。
 - 若 provider 失敗，可在不增加風險的情況下改用另一個 provider 一次。
 - 不要硬編不存在的模型名稱；只有使用者指定或專案文件明確列出時才使用 `--model`。
 
@@ -250,15 +251,16 @@ ask-bridge '請比較這兩份文件的差異。' --file old.md --file new.md
 ask-bridge --provider gemini '請摘要這份 PDF。' --file report.pdf
 ```
 
-對圖片使用 `--image`，目前支援 ChatGPT 與 Claude：
+對圖片使用 `--image`，目前支援 ChatGPT、Claude 與 Microsoft 365 Copilot：
 
 ```sh
 ask-bridge '請描述這張截圖中的 UI 問題，並列出可能的 CSS 原因。' --image screenshot.png
 ask-bridge '請比較這兩張圖的差異。' --image before.png --image after.png
 ask-bridge --provider claude '請描述這張截圖中的 UI 問題。' --image screenshot.png
+ask-bridge --provider copilot '請根據截圖與程式碼分析 UI 問題。' --image screenshot.png --file src/main.rs
 ```
 
-同時附加圖片與文件時，使用 ChatGPT 或 Claude：
+同時附加圖片與文件時，可使用 ChatGPT、Claude 或 Microsoft 365 Copilot：
 
 ```sh
 ask-bridge '請對照設計圖與規格文件，列出不一致處。' --image design.png --file spec.md
@@ -368,7 +370,9 @@ ask-bridge dump --verbose
 ask-bridge screenshot --headless=false
 ```
 
-Gemini 圖片輸入不支援時，改用 ChatGPT 或 Claude，或改以文字描述圖片內容。不要把同一個失敗命令無限制重試。
+Gemini 圖片輸入不支援時，改用 ChatGPT、Claude 或 Microsoft 365 Copilot，或改以文字描述圖片內容。不要把同一個失敗命令無限制重試。
+
+Microsoft 365 Copilot 若找不到「新增內容」或「上傳圖片和檔案」，通常代表租戶授權、檔案格式或公司 IT 原則限制；不要假設附件已成功傳送，也不要無限制重試。
 
 模型切換失敗時，移除 `--model` 或改用 provider 預設模型，不要猜測替代模型名稱。
 

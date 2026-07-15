@@ -6,6 +6,26 @@
 
 ---
 
+## [0.3.0] - 2026-07-15
+
+### 🚀 新增 (Added)
+- Microsoft 365 Copilot provider 支援可重複指定的 `--image` 與 `--file`，使用網頁官方「新增內容」→「上傳圖片和檔案」流程傳送截圖、程式碼與文件。
+- 支援英文、繁體中文與簡體中文的 M365 附件控制項，並補齊常見程式碼、設定檔、Office 文件及圖片 MIME type。
+
+### 🔧 修復 (Fixed)
+- 上傳後會驗證附件指示器、檔名、進度與錯誤提示，附件消失或租戶禁止上傳時不再送出 prompt。
+- Copilot composer 改用可信鍵盤操作清空可見輸入框並讀回確認，附件上傳後再恢復焦點；每次請求會先 fail closed 拒絕既有附件，並在輸入 prompt 前後精確驗證本次附件數量，避免舊草稿、截圖或檔案混入錯誤請求。
+- Copilot 送出按鈕限制於 composer 所屬 form、wrapper 或鄰近區域，避免誤按頁面其他 submit 控制項。
+- 登入狀態偵測補齊英文、繁體中文與簡體中文的登入、登出及帳戶控制項，降低第一次背景啟動後無法切換至可見登入流程的情況。
+- 安裝、更新、npm postinstall、網站與 Release 來源統一指向 `EngelsChou/ask-bridge`，避免 Copilot fork 被 upstream 版本覆蓋。
+- Windows 解除安裝改用隱藏 PowerShell 等待父程序結束後重試自刪，並新增隔離的靜默與延遲按 Enter 互動式 install/uninstall smoke test，確認安裝目錄可完整移除。
+
+### 📚 文件 (Documentation)
+- 更新中英文 README、快速開始與 ask-bridge Skill，補充 M365 圖片／文件範例、Microsoft 官方格式、公司租戶授權與 IT 原則限制。
+- Windows 檔案版本資訊與應用程式清單發行者設為 `Engels Chou`；Release workflow 可在提供受信任 PFX secrets 時強制 Authenticode 簽章，未提供憑證時仍會明確維持未簽章狀態。
+
+---
+
 ## [0.2.5] - 2026-07-10
 
 ### 🚀 新增 (Added)

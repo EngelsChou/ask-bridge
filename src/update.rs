@@ -67,7 +67,7 @@ fn run_update_command() -> Result<(), String> {
         .args([
             "-NoProfile",
             "-Command",
-            "irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | iex",
+            "irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex",
         ])
         .status()
         .map_err(|e| format!("Failed to run Windows update command: {}", e))?;
@@ -76,7 +76,7 @@ fn run_update_command() -> Result<(), String> {
     let status = Command::new("sh")
         .args([
             "-c",
-            "curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash",
+            "curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash",
         ])
         .status()
         .map_err(|e| format!("Failed to run macOS/Linux update command: {}", e))?;

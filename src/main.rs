@@ -15,6 +15,52 @@ use std::time::{Duration, Instant};
 use std::os::windows::process::CommandExt;
 
 const ASK_BRIDGE_CHROME_MARKER: &str = "--ask-bridge-instance";
+const COPILOT_ATTACHMENT_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+const COPILOT_ATTACHMENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const COPILOT_ATTACHMENT_INDICATOR_SELECTOR: &str = concat!(
+    "[data-testid*='attachment-chip' i],",
+    "[data-testid*='file-chip' i],",
+    "[data-testid*='attachment-card' i],",
+    "[data-testid*='file-card' i],",
+    "[data-testid*='attachment-preview' i],",
+    "[data-testid*='image-preview' i],",
+    "[class*='attachmentchip' i],",
+    "[class*='filechip' i],",
+    "[class*='attachmentcard' i],",
+    "[class*='filecard' i],",
+    "[class*='attachment-card' i],",
+    "[class*='file-card' i],",
+    "[class*='attachmentpreview' i],",
+    "[class*='imagepreview' i],",
+    "[class*='attachment-preview' i],",
+    "[class*='image-preview' i],",
+    "[aria-label*='remove attachment' i],",
+    "[title*='remove attachment' i],",
+    "[aria-label*='delete attachment' i],",
+    "[title*='delete attachment' i],",
+    "[aria-label*='remove file' i],",
+    "[title*='remove file' i],",
+    "[aria-label*='delete file' i],",
+    "[title*='delete file' i],",
+    "[aria-label*='remove image' i],",
+    "[title*='remove image' i],",
+    "[aria-label*='delete image' i],",
+    "[title*='delete image' i],",
+    "[aria-label*='移除附件'],",
+    "[title*='移除附件'],",
+    "[aria-label*='刪除附件'],",
+    "[title*='刪除附件'],",
+    "[aria-label*='删除附件'],",
+    "[title*='删除附件'],",
+    "[aria-label*='移除檔案'],",
+    "[title*='移除檔案'],",
+    "[aria-label*='刪除檔案'],",
+    "[title*='刪除檔案'],",
+    "[aria-label*='移除文件'],",
+    "[title*='移除文件'],",
+    "[aria-label*='删除文件'],",
+    "[title*='删除文件']"
+);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LoginState {
@@ -134,11 +180,30 @@ impl Provider {
             }
             Provider::Copilot => {
                 r#"() => {
-                    return document.querySelector('textarea#userInput') !== null ||
-                           document.querySelector('textarea[data-testid*="chat-input"]') !== null ||
-                           document.querySelector('[contenteditable="true"][role="textbox"]') !== null ||
-                           Array.from(document.querySelectorAll('button, a'))
-                               .some((el) => /^(sign in|log in)$/i.test((el.textContent || '').trim()));
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        const rect = el.getBoundingClientRect();
+                        return style.display !== 'none' &&
+                            style.visibility !== 'hidden' &&
+                            style.opacity !== '0' &&
+                            rect.width > 0 && rect.height > 0;
+                    };
+                    const textFor = (el) => [
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('title'),
+                        el.textContent
+                    ].filter(Boolean).join(' ').trim();
+                    const composer = [
+                        'textarea#userInput',
+                        'textarea[data-testid*="chat-input"]',
+                        '[contenteditable="true"][role="textbox"]'
+                    ].flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                        .find(isVisible);
+                    const authControl = Array.from(document.querySelectorAll('a, button, [role="button"]'))
+                        .some((el) => isVisible(el) &&
+                            /sign in|log in|login|登入|登錄|登录/i.test(textFor(el)));
+                    return Boolean(composer || authControl);
                 }"#
             }
         }
@@ -300,16 +365,26 @@ impl Provider {
                             style.opacity !== '0' &&
                             rect.width > 0 && rect.height > 0;
                     };
-                    const composer = document.querySelector('textarea#userInput') ||
-                        document.querySelector('textarea[data-testid*="chat-input"]') ||
-                        document.querySelector('[contenteditable="true"][role="textbox"]');
-                    const account = document.querySelector('[data-testid*="account"]') ||
-                        document.querySelector('button[aria-label*="Account manager"]') ||
-                        document.querySelector('button[aria-label*="Profile"]');
-                    const signIn = Array.from(document.querySelectorAll('a, button'))
-                        .find((el) => isVisible(el) && /^(sign in|log in)$/i.test([
-                            el.getAttribute('aria-label'), el.textContent
-                        ].filter(Boolean).join(' ').trim()));
+                    const textFor = (el) => [
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('title'),
+                        el.textContent
+                    ].filter(Boolean).join(' ').trim();
+                    const composer = [
+                        'textarea#userInput',
+                        'textarea[data-testid*="chat-input"]',
+                        '[contenteditable="true"][role="textbox"]'
+                    ].flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                        .find(isVisible);
+                    const controls = Array.from(document.querySelectorAll('a, button, [role="button"]'));
+                    const account = controls.find((el) => {
+                        if (!isVisible(el)) return false;
+                        const testId = el.getAttribute('data-testid') || '';
+                        const signal = `${testId} ${textFor(el)}`;
+                        return /account[-_ ]?(manager|menu)|profile[-_ ]?(menu|button)|sign out|log out|logout|帳戶管理|帐户管理|個人檔案|个人资料|登出|退出登錄|退出登录|註銷|注销/i.test(signal);
+                    });
+                    const signIn = controls.find((el) => isVisible(el) &&
+                        /sign in|log in|login|登入|登錄|登录/i.test(textFor(el)));
                     return {
                         account: isVisible(account),
                         auth_control: Boolean(signIn),
@@ -520,7 +595,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.2.9")]
+#[command(version = "0.3.0")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -788,7 +863,7 @@ fn run_update_command() -> Result<(), String> {
             .args([
                 "-NoProfile",
                 "-Command",
-                "irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | iex",
+                "irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex",
             ])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -800,7 +875,7 @@ fn run_update_command() -> Result<(), String> {
     let status = Command::new("sh")
         .args([
             "-c",
-            "curl -fsSL https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.sh | bash",
+            "curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash",
         ])
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -2092,6 +2167,44 @@ fn find_snapshot_uid(snapshot: &str, include: &[&str], exclude: &[&str]) -> Opti
     })
 }
 
+fn find_copilot_add_content_uid(snapshot: &str) -> Option<String> {
+    let exclude = [
+        "work content",
+        "cloud",
+        "onedrive",
+        "工作內容",
+        "工作内容",
+        "雲端",
+        "云端",
+    ];
+
+    find_snapshot_uid(snapshot, &["add", "content"], &exclude)
+        .or_else(|| find_snapshot_uid(snapshot, &["新增", "內容"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["添加", "内容"], &exclude))
+}
+
+fn find_copilot_upload_images_and_files_uid(snapshot: &str) -> Option<String> {
+    let exclude = [
+        "work content",
+        "cloud",
+        "onedrive",
+        "工作內容",
+        "工作内容",
+        "雲端",
+        "云端",
+    ];
+
+    find_snapshot_uid(snapshot, &["upload", "images", "files"], &exclude)
+        .or_else(|| find_snapshot_uid(snapshot, &["upload", "image", "file"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["upload", "file"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["上傳", "圖片", "檔案"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["上傳", "影像", "檔案"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["上傳", "檔案"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["上传", "图像", "文件"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["上传", "图片", "文件"], &exclude))
+        .or_else(|| find_snapshot_uid(snapshot, &["上传", "文件"], &exclude))
+}
+
 fn is_glow_available() -> bool {
     Command::new("glow")
         .arg("--version")
@@ -2151,10 +2264,6 @@ fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<()
             "Gemini image attachments are not supported yet. Use --file for Gemini document attachments."
                 .to_string(),
         );
-    }
-
-    if provider == Provider::Copilot && (!cli.images.is_empty() || !cli.files.is_empty()) {
-        return Err("Microsoft 365 Copilot attachments are not supported yet.".to_string());
     }
 
     if provider == Provider::Copilot && cli.model.is_some() {
@@ -2637,17 +2746,72 @@ mod tests {
     }
 
     #[test]
-    fn rejects_copilot_attachments() {
+    fn copilot_login_signals_recognize_visible_localized_sign_in_controls() {
+        let ready_script = Provider::Copilot.ready_check_js();
+        let login_script = Provider::Copilot.login_signals_js();
+
+        for label in ["登入", "登錄", "登录"] {
+            assert!(ready_script.contains(label));
+            assert!(login_script.contains(label));
+        }
+        assert!(ready_script.contains(".some((el) => isVisible(el)"));
+        assert!(login_script.contains("controls.find((el) => isVisible(el)"));
+
+        let signals = LoginSignals {
+            account: false,
+            auth_control: true,
+            auth_path: false,
+            composer: false,
+            stable: true,
+        };
+        assert_eq!(signals.state(Provider::Copilot), LoginState::LoggedOut);
+    }
+
+    #[test]
+    fn copilot_login_signals_recognize_visible_localized_account_controls() {
+        let script = Provider::Copilot.login_signals_js();
+
+        for label in ["登出", "退出登錄", "退出登录", "帳戶管理", "帐户管理"] {
+            assert!(script.contains(label));
+        }
+        assert!(script.contains("if (!isVisible(el)) return false"));
+
+        let signals = LoginSignals {
+            account: true,
+            auth_control: false,
+            auth_path: false,
+            composer: false,
+            stable: true,
+        };
+        assert_eq!(signals.state(Provider::Copilot), LoginState::LoggedIn);
+    }
+
+    #[test]
+    fn trusted_composer_clear_uses_platform_select_all_shortcuts() {
+        assert_eq!(select_all_shortcut(false), "Control+A");
+        assert_eq!(select_all_shortcut(true), "Meta+A");
+    }
+
+    #[test]
+    fn allows_copilot_image_and_file_attachments() {
         let cli = Cli::try_parse_from([
             "ask-bridge",
             "--provider",
             "copilot",
+            "--image",
+            "screen.png",
+            "--image",
+            "detail.jpg",
             "hello",
             "--file",
             "notes.md",
+            "--file",
+            "src/main.rs",
         ])
         .unwrap();
-        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_err());
+        assert_eq!(cli.images, ["screen.png", "detail.jpg"]);
+        assert_eq!(cli.files, ["notes.md", "src/main.rs"]);
+        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_ok());
     }
 
     #[test]
@@ -2729,6 +2893,239 @@ mod tests {
         assert_eq!(
             find_snapshot_uid(snapshot, &["上傳檔案"], &["雲端"]),
             Some("1_11".to_string())
+        );
+    }
+
+    #[test]
+    fn finds_copilot_attachment_controls_in_english_snapshot() {
+        let snapshot = r#"
+            - button "Add content" [uid="1_10"]
+            - menuitem "Add work content" [uid="1_11"]
+            - menuitem "Upload images and files" [uid="1_12"]
+            - menuitem "Attach cloud files from OneDrive" [uid="1_13"]
+        "#;
+        assert_eq!(
+            find_copilot_add_content_uid(snapshot),
+            Some("1_10".to_string())
+        );
+        assert_eq!(
+            find_copilot_upload_images_and_files_uid(snapshot),
+            Some("1_12".to_string())
+        );
+    }
+
+    #[test]
+    fn finds_copilot_attachment_controls_in_traditional_chinese_snapshot() {
+        let snapshot = r#"
+            - button "新增內容" [uid="2_10"]
+            - menuitem "新增工作內容" [uid="2_11"]
+            - menuitem "上傳圖片和檔案" [uid="2_12"]
+            - menuitem "附加雲端檔案" [uid="2_13"]
+        "#;
+        assert_eq!(
+            find_copilot_add_content_uid(snapshot),
+            Some("2_10".to_string())
+        );
+        assert_eq!(
+            find_copilot_upload_images_and_files_uid(snapshot),
+            Some("2_12".to_string())
+        );
+    }
+
+    #[test]
+    fn finds_copilot_attachment_controls_in_simplified_chinese_snapshot() {
+        let snapshot = r#"
+            - button "添加内容" [uid="3_10"]
+            - menuitem "添加工作内容" [uid="3_11"]
+            - menuitem "上传图像和文件" [uid="3_12"]
+            - menuitem "附加云端文件" [uid="3_13"]
+        "#;
+        assert_eq!(
+            find_copilot_add_content_uid(snapshot),
+            Some("3_10".to_string())
+        );
+        assert_eq!(
+            find_copilot_upload_images_and_files_uid(snapshot),
+            Some("3_12".to_string())
+        );
+    }
+
+    #[test]
+    fn copilot_attachment_selector_uses_explicit_localized_indicators() {
+        let selector = COPILOT_ATTACHMENT_INDICATOR_SELECTOR;
+        for expected in [
+            "attachment-chip",
+            "attachment-card",
+            "attachment-preview",
+            "remove attachment",
+            "delete attachment",
+            "remove file",
+            "delete file",
+            "remove image",
+            "delete image",
+            "移除附件",
+            "刪除附件",
+            "删除附件",
+        ] {
+            assert!(
+                selector.contains(expected),
+                "attachment selector should include {expected:?}"
+            );
+        }
+        assert!(
+            !selector
+                .split(',')
+                .any(|candidate| candidate.trim().eq_ignore_ascii_case("img")),
+            "a bare img selector can count unrelated composer icons"
+        );
+    }
+
+    #[test]
+    fn copilot_attachment_baseline_requires_zero_idle_error_free_indicators() {
+        let clean = AttachmentUiOverview {
+            indicator_count: 0,
+            busy: false,
+            error: None,
+        };
+        assert!(validate_copilot_attachment_baseline(&clean).is_ok());
+
+        let stale = AttachmentUiOverview {
+            indicator_count: 1,
+            ..clean.clone()
+        };
+        assert!(validate_copilot_attachment_baseline(&stale).is_err());
+
+        let busy = AttachmentUiOverview {
+            busy: true,
+            ..clean.clone()
+        };
+        assert!(validate_copilot_attachment_baseline(&busy).is_err());
+
+        let errored = AttachmentUiOverview {
+            error: Some("upload failed".to_string()),
+            ..clean
+        };
+        assert!(validate_copilot_attachment_baseline(&errored).is_err());
+    }
+
+    #[test]
+    fn copilot_attachment_receipt_requires_an_exact_indicator_count() {
+        let overview = |indicator_count| AttachmentUiOverview {
+            indicator_count,
+            busy: false,
+            error: None,
+        };
+
+        assert!(validate_copilot_attachment_receipt_overview(&overview(1), 2).is_err());
+        assert!(validate_copilot_attachment_receipt_overview(&overview(2), 2).is_ok());
+        assert!(validate_copilot_attachment_receipt_overview(&overview(3), 2).is_err());
+    }
+
+    #[test]
+    fn copilot_click_send_script_injects_expected_count_and_guards_before_click() {
+        let empty_receipt = AttachmentReceipt::default();
+        assert_eq!(expected_copilot_attachment_count(&empty_receipt), 0);
+
+        let receipt = AttachmentReceipt {
+            paths: vec!["screen.png".to_string()],
+            expected_indicator_count: 7,
+            ..AttachmentReceipt::default()
+        };
+        assert_eq!(expected_copilot_attachment_count(&receipt), 7);
+
+        let script = build_copilot_click_send_js(expected_copilot_attachment_count(&receipt))
+            .expect("Copilot click-send script should build");
+        assert!(script.contains("const expectedAttachmentCount = 7;"));
+        assert!(script.contains(COPILOT_ATTACHMENT_INDICATOR_SELECTOR));
+        assert!(!script.contains("__EXPECTED_ATTACHMENT_COUNT__"));
+        assert!(!script.contains("__ATTACHMENT_SELECTOR__"));
+        assert!(script.contains("const seen = new Set();"));
+        assert!(script.contains("existing.contains(candidate)"));
+        assert!(script.contains("[aria-busy=\"true\"]"));
+
+        let state_guard = script
+            .find("const attachmentState = readAttachmentState();")
+            .expect("script should read attachment state after finding Send");
+        let busy_guard = script[state_guard..]
+            .find("if (attachmentState.busy)")
+            .map(|offset| state_guard + offset)
+            .expect("script should reject a busy upload");
+        let count_guard = script[busy_guard..]
+            .find("attachmentState.indicatorCount !== expectedAttachmentCount")
+            .map(|offset| busy_guard + offset)
+            .expect("script should reject an unexpected attachment count");
+        let click = script[count_guard..]
+            .find("button.click();")
+            .map(|offset| count_guard + offset)
+            .expect("script should click only after both guards");
+        assert!(state_guard < busy_guard && busy_guard < count_guard && count_guard < click);
+        assert!(
+            !script[state_guard..click].contains("await"),
+            "attachment guard and click must remain in one synchronous JavaScript turn"
+        );
+    }
+
+    #[test]
+    fn copilot_attachment_upload_requires_exactly_one_new_stable_indicator() {
+        let before = AttachmentUiState {
+            indicator_count: 1,
+            file_visible: false,
+            busy: false,
+            error: None,
+        };
+        let count_increased = AttachmentUiState {
+            indicator_count: 2,
+            ..before.clone()
+        };
+        assert!(copilot_attachment_upload_ready(&before, &count_increased));
+
+        let filename_appeared = AttachmentUiState {
+            file_visible: true,
+            ..before.clone()
+        };
+        assert!(!copilot_attachment_upload_ready(
+            &before,
+            &filename_appeared
+        ));
+
+        let two_indicators_appeared = AttachmentUiState {
+            indicator_count: 3,
+            ..before.clone()
+        };
+        assert!(!copilot_attachment_upload_ready(
+            &before,
+            &two_indicators_appeared
+        ));
+
+        let still_busy = AttachmentUiState {
+            indicator_count: 2,
+            busy: true,
+            ..before.clone()
+        };
+        assert!(!copilot_attachment_upload_ready(&before, &still_busy));
+
+        let upload_error = AttachmentUiState {
+            indicator_count: 2,
+            error: Some("upload failed".to_string()),
+            ..before.clone()
+        };
+        assert!(!copilot_attachment_upload_ready(&before, &upload_error));
+
+        assert!(!copilot_attachment_upload_ready(&before, &before));
+    }
+
+    #[test]
+    fn maps_microsoft_365_copilot_attachment_mime_types() {
+        assert_eq!(mime_type_for_extension("tiff"), "image/tiff");
+        assert_eq!(
+            mime_type_for_extension("xlsm"),
+            "application/vnd.ms-excel.sheet.macroEnabled.12"
+        );
+        assert_eq!(mime_type_for_extension("dart"), "text/x-dart");
+        assert_eq!(mime_type_for_extension("config"), "text/plain");
+        assert_eq!(
+            mime_type_for_extension("loop"),
+            "application/vnd.microsoft.loop"
         );
     }
 
@@ -4024,6 +4421,474 @@ fn display_image_in_terminal(image_path: &str) {
     let _ = Command::new("kitty").args(["icat", image_path]).status();
 }
 
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+struct AttachmentUiState {
+    indicator_count: usize,
+    file_visible: bool,
+    busy: bool,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+struct AttachmentUiOverview {
+    indicator_count: usize,
+    busy: bool,
+    error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AttachmentReceipt {
+    paths: Vec<String>,
+    filename_confirmed_paths: Vec<String>,
+    expected_indicator_count: usize,
+}
+
+impl AttachmentReceipt {
+    fn is_empty(&self) -> bool {
+        self.paths.is_empty()
+    }
+}
+
+fn copilot_attachment_upload_ready(before: &AttachmentUiState, after: &AttachmentUiState) -> bool {
+    after.error.is_none()
+        && !after.busy
+        && before
+            .indicator_count
+            .checked_add(1)
+            .is_some_and(|expected| after.indicator_count == expected)
+}
+
+fn validate_copilot_attachment_baseline(state: &AttachmentUiOverview) -> Result<(), String> {
+    if let Some(error) = &state.error {
+        return Err(format!(
+            "Microsoft 365 Copilot reported an attachment UI error: {}",
+            error
+        ));
+    }
+    if state.busy {
+        return Err(
+            "Microsoft 365 Copilot has an attachment upload in progress. Wait for it to finish, remove any attachment manually, and retry."
+                .to_string(),
+        );
+    }
+    if state.indicator_count != 0 {
+        return Err(format!(
+            "Microsoft 365 Copilot already has {} attachment indicator(s). Remove every existing attachment manually before retrying; ask-bridge will not delete attachment chips automatically.",
+            state.indicator_count
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_copilot_attachment_receipt_overview(
+    state: &AttachmentUiOverview,
+    expected_indicator_count: usize,
+) -> Result<(), String> {
+    if let Some(error) = &state.error {
+        return Err(error.clone());
+    }
+    if state.busy {
+        return Err("Microsoft 365 Copilot attachments are still uploading".to_string());
+    }
+    if state.indicator_count != expected_indicator_count {
+        return Err(format!(
+            "Microsoft 365 Copilot attachment indicators changed before submission (expected exactly {}, found {})",
+            expected_indicator_count, state.indicator_count
+        ));
+    }
+
+    Ok(())
+}
+
+fn read_copilot_attachment_ui_value(
+    config_path: &str,
+    file_name: Option<&str>,
+    file_stem: Option<&str>,
+) -> Result<Value, String> {
+    let file_name_json = serde_json::to_string(&file_name)
+        .map_err(|e| format!("Failed to serialize attachment file name: {}", e))?;
+    let file_stem_json = serde_json::to_string(&file_stem)
+        .map_err(|e| format!("Failed to serialize attachment file stem: {}", e))?;
+    let indicator_selector_json = serde_json::to_string(COPILOT_ATTACHMENT_INDICATOR_SELECTOR)
+        .map_err(|e| format!("Failed to serialize attachment indicator selector: {}", e))?;
+
+    let js = r#"() => {
+        const composerSelectors = __COMPOSER_SELECTORS__;
+        const requestedFileName = __FILE_NAME__;
+        const requestedFileStem = __FILE_STEM__;
+        const fileName = typeof requestedFileName === 'string'
+            ? requestedFileName.toLocaleLowerCase()
+            : '';
+        const fileStem = typeof requestedFileStem === 'string'
+            ? requestedFileStem.toLocaleLowerCase()
+            : '';
+        const candidateSelector = __ATTACHMENT_SELECTOR__;
+        const isVisible = (el) => {
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const composer = composerSelectors
+            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+            .find(isVisible);
+        if (!composer) {
+            return {
+                indicator_count: 0,
+                file_visible: false,
+                busy: false,
+                error: 'Microsoft 365 Copilot composer not found while checking attachments'
+            };
+        }
+
+        const root = composer.closest(
+            'form, [data-testid*="composer-container" i], [data-testid*="composer-wrapper" i], [class*="ComposerWrapper"], [class*="ChatInputContainer"]'
+        ) || composer.parentElement?.parentElement?.parentElement?.parentElement || composer.parentElement;
+        if (!root) {
+            return {
+                indicator_count: 0,
+                file_visible: false,
+                busy: false,
+                error: 'Microsoft 365 Copilot composer container not found while checking attachments'
+            };
+        }
+
+        const rawCandidates = Array.from(root.querySelectorAll(candidateSelector)).filter((el) => {
+            if (!isVisible(el) || el === composer || composer.contains(el)) return false;
+            const label = [
+                el.getAttribute('aria-label'),
+                el.getAttribute('title'),
+                el.getAttribute('data-testid'),
+                el.textContent
+            ].filter(Boolean).join(' ').toLocaleLowerCase();
+            if (/add content|upload images|upload files|新增內容|上傳圖片|上傳檔案|添加内容|上传图像|上传文件/i.test(label)) {
+                return false;
+            }
+            return true;
+        });
+        const seen = new Set();
+        const candidates = [];
+        for (const candidate of rawCandidates) {
+            if (seen.has(candidate)) continue;
+            seen.add(candidate);
+
+            // A chip/card and its nested preview/remove button often match more than
+            // one selector. Count the outermost matching attachment element once.
+            if (candidates.some((existing) => existing.contains(candidate))) continue;
+            for (let index = candidates.length - 1; index >= 0; index--) {
+                if (candidate.contains(candidates[index])) candidates.splice(index, 1);
+            }
+            candidates.push(candidate);
+        }
+        const textFor = (el) => [
+            el.getAttribute('aria-label'),
+            el.getAttribute('title'),
+            el.getAttribute('alt'),
+            el.getAttribute('data-testid'),
+            el.textContent
+        ].filter(Boolean).join(' ').toLocaleLowerCase();
+        const fileVisible = Boolean(fileName) && candidates.some((el) => {
+            const text = textFor(el);
+            return text.includes(fileName) || (fileStem && text.includes(fileStem));
+        });
+        const busy = Array.from(root.querySelectorAll(
+            '[aria-busy="true"], [role="progressbar"], [data-testid*="upload-progress" i], [class*="UploadProgress"], [class*="upload-progress"]'
+        )).some(isVisible);
+
+        const alertText = Array.from(document.querySelectorAll(
+            '[role="alert"], [role="status"], [data-testid*="toast" i], [class*="Toast"]'
+        )).filter(isVisible).map((el) => (el.innerText || el.textContent || '').trim()).filter(Boolean).join('\n');
+        const errorPatterns = [
+            /(?:upload|attach|file|image)[^\n]{0,100}(?:failed|error|unsupported|not supported|unable|couldn['’]?t|too large|too many|blocked)/i,
+            /(?:failed|error|unsupported|not supported|unable|couldn['’]?t|too large|too many|blocked)[^\n]{0,100}(?:upload|attach|file|image)/i,
+            /(?:上傳|上传|附件|檔案|文件|圖片|图像)[^\n]{0,60}(?:失敗|失败|錯誤|错误|不支援|不支持|無法|无法|過大|过大|封鎖|阻止)/i
+        ];
+        const error = errorPatterns.some((pattern) => pattern.test(alertText)) ? alertText : null;
+
+        return {
+            indicator_count: candidates.length,
+            file_visible: Boolean(fileVisible),
+            busy: Boolean(busy),
+            error
+        };
+    }"#
+    .replace(
+        "__COMPOSER_SELECTORS__",
+        Provider::Copilot.composer_selectors_json(),
+    )
+    .replace("__ATTACHMENT_SELECTOR__", &indicator_selector_json)
+    .replace("__FILE_NAME__", &file_name_json)
+    .replace("__FILE_STEM__", &file_stem_json);
+
+    let result = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": js }),
+    )?;
+    parse_script_result(&result)
+}
+
+fn read_copilot_attachment_ui_overview(config_path: &str) -> Result<AttachmentUiOverview, String> {
+    let parsed = read_copilot_attachment_ui_value(config_path, None, None)?;
+    serde_json::from_value(parsed)
+        .map_err(|e| format!("Failed to parse Copilot attachment UI overview: {}", e))
+}
+
+fn read_copilot_attachment_ui_state(
+    config_path: &str,
+    path: &str,
+) -> Result<AttachmentUiState, String> {
+    let file_name = Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(path);
+    let file_stem = Path::new(path)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(file_name);
+    let parsed = read_copilot_attachment_ui_value(config_path, Some(file_name), Some(file_stem))?;
+    serde_json::from_value(parsed)
+        .map_err(|e| format!("Failed to parse Copilot attachment UI state: {}", e))
+}
+
+fn ensure_copilot_attachment_baseline(config_path: &str) -> Result<(), String> {
+    let overview = read_copilot_attachment_ui_overview(config_path)?;
+    validate_copilot_attachment_baseline(&overview)
+}
+
+fn click_copilot_add_content_via_dom(config_path: &str) -> Result<(), String> {
+    let js = r#"() => {
+        const composerSelectors = __COMPOSER_SELECTORS__;
+        const isVisible = (el) => {
+            if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
+            const style = window.getComputedStyle(el);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            const rect = el.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        };
+        const composer = composerSelectors
+            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+            .find(isVisible);
+        if (!composer) return { ok: false, error: 'composer not found' };
+        const composerRect = composer.getBoundingClientRect();
+        const nearComposer = (el) => {
+            const rect = el.getBoundingClientRect();
+            const horizontal = Math.abs((rect.left + rect.right) / 2 - (composerRect.left + composerRect.right) / 2);
+            return horizontal <= Math.max(600, composerRect.width) &&
+                rect.bottom >= composerRect.top - 250 && rect.top <= composerRect.bottom + 250;
+        };
+        const labelFor = (el) => [
+            el.getAttribute('aria-label'),
+            el.getAttribute('title'),
+            el.getAttribute('data-testid'),
+            el.textContent
+        ].filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+        const candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
+            .filter((el) => isVisible(el) && nearComposer(el));
+        const button = candidates.find((el) => {
+            const label = labelFor(el);
+            return /add content/i.test(label) || label.includes('新增內容') || label.includes('添加内容');
+        }) || candidates.find((el) => /attach|add.?content/i.test(el.getAttribute('data-testid') || ''));
+        if (!button) return { ok: false, error: 'Add content button not found' };
+        const label = labelFor(button);
+        button.click();
+        return { ok: true, label };
+    }"#
+    .replace(
+        "__COMPOSER_SELECTORS__",
+        Provider::Copilot.composer_selectors_json(),
+    );
+
+    let result = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": js }),
+    )?;
+    let parsed = parse_script_result(&result)?;
+    if parsed
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        Ok(())
+    } else {
+        Err(parsed
+            .get("error")
+            .and_then(|value| value.as_str())
+            .unwrap_or("Add content button not found")
+            .to_string())
+    }
+}
+
+fn open_copilot_local_upload_menu(config_path: &str) -> Result<String, String> {
+    let snapshot = take_snapshot_text(config_path)?;
+    if let Some(upload_uid) = find_copilot_upload_images_and_files_uid(&snapshot) {
+        return Ok(upload_uid);
+    }
+
+    let clicked = if let Some(add_content_uid) = find_copilot_add_content_uid(&snapshot) {
+        call_mcp_tool(
+            config_path,
+            "click",
+            serde_json::json!({
+                "uid": add_content_uid,
+                "includeSnapshot": false
+            }),
+        )
+        .map(|_| ())
+    } else {
+        click_copilot_add_content_via_dom(config_path)
+    };
+    clicked.map_err(|e| {
+        format!(
+            "Could not open Microsoft 365 Copilot Add content menu: {}",
+            e
+        )
+    })?;
+
+    let started = Instant::now();
+    while started.elapsed() < Duration::from_secs(8) {
+        thread::sleep(Duration::from_millis(200));
+        let snapshot = take_snapshot_text(config_path)?;
+        if let Some(upload_uid) = find_copilot_upload_images_and_files_uid(&snapshot) {
+            return Ok(upload_uid);
+        }
+    }
+
+    Err(
+        "Microsoft 365 Copilot did not show 'Upload images and files' after opening Add content. The tenant license or company policy may disable local uploads."
+            .to_string(),
+    )
+}
+
+fn wait_for_copilot_attachment_upload(
+    config_path: &str,
+    path: &str,
+    before: &AttachmentUiState,
+    verbose: bool,
+) -> Result<AttachmentUiState, String> {
+    let started = Instant::now();
+    let mut stable_successes = 0usize;
+    let mut last_state = before.clone();
+
+    while started.elapsed() < COPILOT_ATTACHMENT_UPLOAD_TIMEOUT {
+        thread::sleep(COPILOT_ATTACHMENT_POLL_INTERVAL);
+        let state = read_copilot_attachment_ui_state(config_path, path)?;
+        if let Some(error) = &state.error {
+            return Err(format!(
+                "Microsoft 365 Copilot rejected attachment '{}': {}",
+                path, error
+            ));
+        }
+
+        if copilot_attachment_upload_ready(before, &state) {
+            stable_successes += 1;
+            if stable_successes >= 2 {
+                if verbose {
+                    println!(
+                        "{} accepted attachment '{}'",
+                        Provider::Copilot.display_name(),
+                        Path::new(path)
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .unwrap_or(path)
+                    );
+                }
+                return Ok(state);
+            }
+        } else {
+            stable_successes = 0;
+        }
+        last_state = state;
+    }
+
+    Err(format!(
+        "Timed out waiting for Microsoft 365 Copilot to finish uploading '{}'. Attachment indicators: {} -> {}; busy: {}",
+        path, before.indicator_count, last_state.indicator_count, last_state.busy
+    ))
+}
+
+fn upload_copilot_attachments_via_file_chooser(
+    config_path: &str,
+    image_paths: &[String],
+    file_paths: &[String],
+    verbose: bool,
+) -> Result<AttachmentReceipt, String> {
+    let mut receipt = AttachmentReceipt::default();
+
+    for path in image_paths.iter().chain(file_paths.iter()) {
+        if receipt.is_empty() {
+            ensure_copilot_attachment_baseline(config_path)?;
+        } else {
+            ensure_copilot_attachment_receipt(config_path, &receipt)?;
+        }
+
+        let canonical_path = std::fs::canonicalize(path)
+            .map_err(|e| format!("Failed to resolve file '{}': {}", path, e))?;
+        let file_path = canonical_path.to_string_lossy().to_string();
+        let before = read_copilot_attachment_ui_state(config_path, path)?;
+        if let Some(error) = &before.error {
+            return Err(error.clone());
+        }
+
+        let upload_uid = open_copilot_local_upload_menu(config_path)?;
+        if verbose {
+            println!(
+                "Uploading attachment '{}' to {}...",
+                file_path,
+                Provider::Copilot.display_name()
+            );
+        }
+        call_mcp_tool(
+            config_path,
+            "upload_file",
+            serde_json::json!({
+                "uid": upload_uid,
+                "filePath": file_path,
+                "includeSnapshot": false
+            }),
+        )?;
+
+        let after = wait_for_copilot_attachment_upload(config_path, path, &before, verbose)?;
+        receipt.paths.push(path.clone());
+        receipt.expected_indicator_count = after.indicator_count;
+        if after.file_visible {
+            receipt.filename_confirmed_paths.push(path.clone());
+        }
+    }
+
+    Ok(receipt)
+}
+
+fn ensure_copilot_attachment_receipt(
+    config_path: &str,
+    receipt: &AttachmentReceipt,
+) -> Result<(), String> {
+    if receipt.is_empty() {
+        return Ok(());
+    }
+
+    let overview = read_copilot_attachment_ui_overview(config_path)?;
+    validate_copilot_attachment_receipt_overview(&overview, receipt.expected_indicator_count)?;
+
+    for path in &receipt.filename_confirmed_paths {
+        let state = read_copilot_attachment_ui_state(config_path, path)?;
+        if !state.file_visible {
+            return Err(format!(
+                "Microsoft 365 Copilot attachment '{}' disappeared before submission",
+                Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or(path)
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn wait_for_attachment_indicator(
     config_path: &str,
     provider: Provider,
@@ -4099,9 +4964,7 @@ fn upload_attachments_via_file_chooser(
 
         let snapshot = take_snapshot_text(config_path)?;
         let menu_uid = match provider {
-            Provider::Copilot => {
-                return Err("Microsoft 365 Copilot attachments are not supported yet.".to_string());
-            }
+            Provider::Copilot => find_copilot_add_content_uid(&snapshot),
             Provider::Gemini => {
                 find_snapshot_uid(&snapshot, &["上傳與工具"], &["更多", "雲端", "drive"])
                     .or_else(|| find_snapshot_uid(&snapshot, &["upload"], &["drive"]))
@@ -4129,9 +4992,7 @@ fn upload_attachments_via_file_chooser(
 
         let snapshot = take_snapshot_text(config_path)?;
         let upload_uid = match provider {
-            Provider::Copilot => {
-                return Err("Microsoft 365 Copilot attachments are not supported yet.".to_string());
-            }
+            Provider::Copilot => find_copilot_upload_images_and_files_uid(&snapshot),
             Provider::Gemini => find_snapshot_uid(&snapshot, &["上傳檔案"], &["雲端", "drive"])
                 .or_else(|| find_snapshot_uid(&snapshot, &["upload", "file"], &["drive"])),
             Provider::ChatGpt => find_snapshot_uid(&snapshot, &["file"], &["drive", "connect"]),
@@ -4179,16 +5040,20 @@ fn mime_type_for_extension(ext: &str) -> &'static str {
         "webp" => "image/webp",
         "svg" => "image/svg+xml",
         "bmp" => "image/bmp",
+        "tif" | "tiff" => "image/tiff",
         "avif" => "image/avif",
         "ico" => "image/x-icon",
         // Documents
         "pdf" => "application/pdf",
         "doc" => "application/msword",
         "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "docm" => "application/vnd.ms-word.document.macroEnabled.12",
         "xls" => "application/vnd.ms-excel",
         "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "xlsm" => "application/vnd.ms-excel.sheet.macroEnabled.12",
         "ppt" => "application/vnd.ms-powerpoint",
         "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "ppsm" => "application/vnd.ms-powerpoint.slideshow.macroEnabled.12",
         "odt" => "application/vnd.oasis.opendocument.text",
         "ods" => "application/vnd.oasis.opendocument.spreadsheet",
         "odp" => "application/vnd.oasis.opendocument.presentation",
@@ -4206,6 +5071,9 @@ fn mime_type_for_extension(ext: &str) -> &'static str {
         "js" | "mjs" | "cjs" => "text/javascript",
         "jsx" => "text/javascript",
         "css" => "text/css",
+        "dart" => "text/x-dart",
+        "lua" => "text/x-lua",
+        "pl" => "text/x-perl",
         "py" => "text/x-python",
         "rb" => "text/x-ruby",
         "go" => "text/x-go",
@@ -4224,8 +5092,10 @@ fn mime_type_for_extension(ext: &str) -> &'static str {
         "zsh" => "application/x-sh",
         "sql" => "application/sql",
         "toml" => "application/toml",
-        "ini" => "text/plain",
+        "ini" | "config" | "utf8" => "text/plain",
         "log" => "text/plain",
+        "loop" => "application/vnd.microsoft.loop",
+        "fluid" => "application/vnd.microsoft.fluid",
         // Archives
         "zip" => "application/zip",
         "gz" | "gzip" => "application/gzip",
@@ -4250,17 +5120,26 @@ fn mime_type_for_extension(ext: &str) -> &'static str {
 
 /// Upload local image and/or document files to the provider prompt composer using the
 /// best available provider-specific upload mechanism.
-/// Returns an error string if any attachment fails to upload.
+/// Returns a receipt that Copilot can re-check immediately before submission.
 fn upload_attachments_to_provider(
     config_path: &str,
     provider: Provider,
     image_paths: &[String],
     file_paths: &[String],
     verbose: bool,
-) -> Result<(), String> {
+) -> Result<AttachmentReceipt, String> {
     let total = image_paths.len() + file_paths.len();
     if total == 0 {
-        return Ok(());
+        return Ok(AttachmentReceipt::default());
+    }
+
+    if provider == Provider::Copilot {
+        return upload_copilot_attachments_via_file_chooser(
+            config_path,
+            image_paths,
+            file_paths,
+            verbose,
+        );
     }
 
     let data_transfer_image_paths: &[String] = if provider == Provider::Gemini
@@ -4286,7 +5165,7 @@ fn upload_attachments_to_provider(
 
     let data_transfer_total = data_transfer_image_paths.len() + file_paths.len();
     if data_transfer_total == 0 {
-        return Ok(());
+        return Ok(AttachmentReceipt::default());
     }
 
     if verbose {
@@ -4457,18 +5336,19 @@ fn upload_attachments_to_provider(
                         e
                     );
                 }
-                return upload_attachments_via_file_chooser(
+                upload_attachments_via_file_chooser(
                     config_path,
                     provider,
                     image_paths,
                     file_paths,
                     verbose,
-                );
+                )?;
+                return Ok(AttachmentReceipt::default());
             }
         }
     }
 
-    Ok(())
+    Ok(AttachmentReceipt::default())
 }
 
 /// Switch the selected provider to the specified model. The page must already be
@@ -4762,40 +5642,25 @@ fn wait_for_submit_status(config_path: &str) -> Result<String, String> {
     Ok(status)
 }
 
-fn focus_and_clear_composer(config_path: &str, provider: Provider) -> Result<(), String> {
+fn focus_composer(config_path: &str, provider: Provider) -> Result<(), String> {
     let js = r#"() => {
             const composerSelectors = __COMPOSER_SELECTORS__;
-            const el = composerSelectors.map((s) => document.querySelector(s)).find(Boolean);
+            const el = composerSelectors
+                .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                .find((candidate) => {
+                    const style = window.getComputedStyle(candidate);
+                    const rect = candidate.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        style.opacity !== '0' &&
+                        rect.width > 0 && rect.height > 0;
+                });
             if (!el) {
-                return { ok: false, error: 'composer not found' };
+                return { ok: false, error: 'visible composer not found' };
             }
 
-            el.focus();
-            try {
-                const range = document.createRange();
-                range.selectNodeContents(el);
-                const sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
-                document.execCommand('delete');
-            } catch (e) {}
-
-            const currentText = typeof el.value !== 'undefined' ? el.value : (el.innerText || el.textContent || '');
-            if ((currentText || '').trim().length > 0) {
-                if (typeof el.value !== 'undefined') {
-                    el.value = '';
-                    if (el._valueTracker) {
-                        el._valueTracker.setValue('');
-                    }
-                } else {
-                    el.innerHTML = '<p><br></p>';
-                }
-                el.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'deleteContentBackward' }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            }
-
-            el.focus();
-            return { ok: true };
+            el.focus({ preventScroll: true });
+            return { ok: document.activeElement === el };
         }"#
     .replace("__COMPOSER_SELECTORS__", provider.composer_selectors_json());
 
@@ -4815,8 +5680,115 @@ fn focus_and_clear_composer(config_path: &str, provider: Provider) -> Result<(),
         Err(parsed
             .get("error")
             .and_then(|err| err.as_str())
-            .unwrap_or("failed to focus and clear composer")
+            .unwrap_or("failed to focus composer")
             .to_string())
+    }
+}
+
+fn visible_composer_is_empty(config_path: &str, provider: Provider) -> Result<bool, String> {
+    let js = r#"() => {
+            const composerSelectors = __COMPOSER_SELECTORS__;
+            const el = composerSelectors
+                .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                .find((candidate) => {
+                    const style = window.getComputedStyle(candidate);
+                    const rect = candidate.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        style.opacity !== '0' &&
+                        rect.width > 0 && rect.height > 0;
+                });
+            if (!el) {
+                return { ok: false, error: 'visible composer not found' };
+            }
+
+            const rawText = typeof el.value !== 'undefined'
+                ? el.value
+                : (el.innerText || el.textContent || '');
+            const normalizedText = String(rawText)
+                .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                .replace(/\u00A0/g, ' ')
+                .trim();
+            return {
+                ok: true,
+                empty: normalizedText.length === 0,
+                textLength: normalizedText.length
+            };
+        }"#
+    .replace("__COMPOSER_SELECTORS__", provider.composer_selectors_json());
+
+    let res = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": js }),
+    )?;
+    let parsed = parse_script_result(&res)?;
+    if !parsed
+        .get("ok")
+        .and_then(|ok| ok.as_bool())
+        .unwrap_or(false)
+    {
+        return Err(parsed
+            .get("error")
+            .and_then(|err| err.as_str())
+            .unwrap_or("failed to read visible composer state")
+            .to_string());
+    }
+
+    parsed
+        .get("empty")
+        .and_then(|empty| empty.as_bool())
+        .ok_or_else(|| "visible composer state did not include an empty flag".to_string())
+}
+
+fn press_composer_key(config_path: &str, key: &str) -> Result<(), String> {
+    call_mcp_tool(
+        config_path,
+        "press_key",
+        serde_json::json!({
+            "key": key,
+            "includeSnapshot": false
+        }),
+    )?;
+    Ok(())
+}
+
+fn wait_for_visible_composer_empty(config_path: &str, provider: Provider) -> Result<bool, String> {
+    for _ in 0..20 {
+        if visible_composer_is_empty(config_path, provider)? {
+            return Ok(true);
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(false)
+}
+
+fn select_all_shortcut(is_macos: bool) -> &'static str {
+    if is_macos { "Meta+A" } else { "Control+A" }
+}
+
+fn focus_and_clear_composer(config_path: &str, provider: Provider) -> Result<(), String> {
+    // React-controlled textareas can ignore synthetic value/input mutations when
+    // their internal value tracker observes the same value. Drive the focused
+    // composer through Chrome DevTools' trusted keyboard path instead.
+    let select_all_key = select_all_shortcut(cfg!(target_os = "macos"));
+
+    focus_composer(config_path, provider)?;
+    press_composer_key(config_path, select_all_key)?;
+    press_composer_key(config_path, "Backspace")?;
+    if wait_for_visible_composer_empty(config_path, provider)? {
+        return Ok(());
+    }
+
+    // Some rich-text editors only honor Delete for the active selection. Retry
+    // with a fresh trusted selection, then verify the DOM before continuing.
+    focus_composer(config_path, provider)?;
+    press_composer_key(config_path, select_all_key)?;
+    press_composer_key(config_path, "Delete")?;
+    if wait_for_visible_composer_empty(config_path, provider)? {
+        Ok(())
+    } else {
+        Err("visible composer still contained text after trusted clear keys".to_string())
     }
 }
 
@@ -5047,40 +6019,37 @@ fn submit_regular_prompt(
     wait_for_submit_status(config_path)
 }
 
-fn submit_copilot_prompt(config_path: &str, prompt: &str, verbose: bool) -> Result<String, String> {
-    if verbose {
-        println!("Typing prompt through the Microsoft 365 Copilot composer...");
+fn expected_copilot_attachment_count(receipt: &AttachmentReceipt) -> usize {
+    if receipt.is_empty() {
+        0
+    } else {
+        receipt.expected_indicator_count
     }
+}
 
-    // Copilot's React composer handles trusted keyboard input reliably. Synthetic
-    // paste events can insert the prompt twice without updating the send-button
-    // state, so use the same browser typing path as the ChatGPT agent workflow.
-    focus_and_clear_composer(config_path, Provider::Copilot)?;
-    call_mcp_tool(
-        config_path,
-        "type_text",
-        serde_json::json!({
-            "text": prompt
-        }),
-    )?;
+fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String, String> {
+    let attachment_selector_json = serde_json::to_string(COPILOT_ATTACHMENT_INDICATOR_SELECTOR)
+        .map_err(|e| format!("Failed to serialize attachment indicator selector: {}", e))?;
 
-    let click_send_js = r#"() => {
+    Ok(r#"() => {
             window.__submit_status = 'pending';
             window.__ask_bridge_generation_seen = false;
             (async () => {
                 try {
                     const composerSelectors = __COMPOSER_SELECTORS__;
                     const sendSelectors = __SEND_SELECTORS__;
+                    const attachmentSelector = __ATTACHMENT_SELECTOR__;
+                    const expectedAttachmentCount = __EXPECTED_ATTACHMENT_COUNT__;
+                    const isVisible = (el) => {
+                        if (!el) return false;
+                        const style = window.getComputedStyle(el);
+                        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+                        const rect = el.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
                     const composer = composerSelectors
                         .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
-                        .find((el) => {
-                            const style = window.getComputedStyle(el);
-                            const rect = el.getBoundingClientRect();
-                            return style.display !== 'none' &&
-                                style.visibility !== 'hidden' &&
-                                style.opacity !== '0' &&
-                                rect.width > 0 && rect.height > 0;
-                        });
+                        .find(isVisible);
                     if (!composer) {
                         window.__submit_status = 'error: composer not found after typing';
                         return;
@@ -5094,20 +6063,78 @@ fn submit_copilot_prompt(config_path: &str, prompt: &str, verbose: bool) -> Resu
                         return;
                     }
 
-                    const isClickable = (el) => {
-                        if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
-                        const style = window.getComputedStyle(el);
-                        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
-                        const rect = el.getBoundingClientRect();
-                        return rect.width > 0 && rect.height > 0;
+                    const attachmentRoot = composer.closest(
+                        'form, [data-testid*="composer-container" i], [data-testid*="composer-wrapper" i], [class*="ComposerWrapper"], [class*="ChatInputContainer"]'
+                    ) || composer.parentElement?.parentElement?.parentElement?.parentElement || composer.parentElement;
+                    const readAttachmentState = () => {
+                        if (!attachmentRoot) {
+                            return { ok: false, indicatorCount: 0, busy: false };
+                        }
+                        const rawCandidates = Array.from(
+                            attachmentRoot.querySelectorAll(attachmentSelector)
+                        ).filter((el) => {
+                            if (!isVisible(el) || el === composer || composer.contains(el)) return false;
+                            const label = [
+                                el.getAttribute('aria-label'),
+                                el.getAttribute('title'),
+                                el.getAttribute('data-testid'),
+                                el.textContent
+                            ].filter(Boolean).join(' ').toLocaleLowerCase();
+                            return !/add content|upload images|upload files|新增內容|上傳圖片|上傳檔案|添加内容|上传图像|上传文件/i.test(label);
+                        });
+                        const seen = new Set();
+                        const candidates = [];
+                        for (const candidate of rawCandidates) {
+                            if (seen.has(candidate)) continue;
+                            seen.add(candidate);
+                            if (candidates.some((existing) => existing.contains(candidate))) continue;
+                            for (let index = candidates.length - 1; index >= 0; index--) {
+                                if (candidate.contains(candidates[index])) candidates.splice(index, 1);
+                            }
+                            candidates.push(candidate);
+                        }
+                        const busy = Array.from(attachmentRoot.querySelectorAll(
+                            '[aria-busy="true"], [role="progressbar"], [data-testid*="upload-progress" i], [class*="UploadProgress"], [class*="upload-progress"]'
+                        )).some(isVisible);
+                        return {
+                            ok: true,
+                            indicatorCount: candidates.length,
+                            busy: Boolean(busy)
+                        };
                     };
+
+                    const isClickable = (el) =>
+                        Boolean(el) &&
+                        !el.disabled &&
+                        el.getAttribute('aria-disabled') !== 'true' &&
+                        isVisible(el);
+                    const composerForm = composer.closest('form');
+                    const composerWrapper = composer.closest(
+                        '[data-testid*="composer"], [data-testid*="chat-input"], [class*="Composer"], [class*="ChatInput"], [class*="PromptInput"]'
+                    );
+                    const composerRect = composer.getBoundingClientRect();
+                    const isNearComposer = (button) => {
+                        const rect = button.getBoundingClientRect();
+                        const verticalDistance = Math.max(
+                            0,
+                            composerRect.top - rect.bottom,
+                            rect.top - composerRect.bottom
+                        );
+                        const horizontalOverlap = rect.right >= composerRect.left - 160 &&
+                            rect.left <= composerRect.right + 160;
+                        return horizontalOverlap && verticalDistance <= 160;
+                    };
+                    const belongsToComposer = (button) =>
+                        Boolean(composerForm && composerForm.contains(button)) ||
+                        Boolean(composerWrapper && composerWrapper.contains(button)) ||
+                        isNearComposer(button);
                     const findSendButton = () => {
                         const seen = new Set();
                         for (const selector of sendSelectors) {
                             for (const button of document.querySelectorAll(selector)) {
                                 if (seen.has(button)) continue;
                                 seen.add(button);
-                                if (isClickable(button)) return button;
+                                if (isClickable(button) && belongsToComposer(button)) return button;
                             }
                         }
                         return null;
@@ -5116,6 +6143,22 @@ fn submit_copilot_prompt(config_path: &str, prompt: &str, verbose: bool) -> Resu
                     for (let i = 0; i < 150; i++) {
                         const button = findSendButton();
                         if (button) {
+                            // This guard and click deliberately share one synchronous
+                            // JavaScript turn so the DOM cannot update between them.
+                            const attachmentState = readAttachmentState();
+                            if (!attachmentState.ok) {
+                                window.__submit_status = 'error: Copilot attachment container not found immediately before submission';
+                                return;
+                            }
+                            if (attachmentState.busy) {
+                                window.__submit_status = 'error: Copilot attachment upload became busy immediately before submission';
+                                return;
+                            }
+                            if (attachmentState.indicatorCount !== expectedAttachmentCount) {
+                                window.__submit_status = 'error: Copilot attachment indicators changed immediately before submission (expected ' +
+                                    expectedAttachmentCount + ', found ' + attachmentState.indicatorCount + ')';
+                                return;
+                            }
                             button.click();
                             window.__submit_status = 'success:' + JSON.stringify({
                                 clicked: true,
@@ -5141,7 +6184,54 @@ fn submit_copilot_prompt(config_path: &str, prompt: &str, verbose: bool) -> Resu
     .replace(
         "__SEND_SELECTORS__",
         Provider::Copilot.send_button_selectors_json(),
-    );
+    )
+    .replace("__ATTACHMENT_SELECTOR__", &attachment_selector_json)
+    .replace(
+        "__EXPECTED_ATTACHMENT_COUNT__",
+        &expected_indicator_count.to_string(),
+    ))
+}
+
+fn submit_copilot_prompt(
+    config_path: &str,
+    prompt: &str,
+    attachment_receipt: &AttachmentReceipt,
+    verbose: bool,
+) -> Result<String, String> {
+    if verbose {
+        println!("Typing prompt through the Microsoft 365 Copilot composer...");
+    }
+
+    // Copilot's React composer handles trusted keyboard input reliably. Synthetic
+    // paste events can insert the prompt twice without updating the send-button
+    // state, so use the same browser typing path as the ChatGPT agent workflow.
+    if attachment_receipt.is_empty() {
+        ensure_copilot_attachment_baseline(config_path)?;
+        focus_and_clear_composer(config_path, Provider::Copilot)?;
+        ensure_copilot_attachment_baseline(config_path)?;
+    } else {
+        ensure_copilot_attachment_receipt(config_path, attachment_receipt)?;
+        // File upload leaves browser focus on the picker/menu. Restore the
+        // composer without clearing it so the uploaded attachment chips remain.
+        focus_composer(config_path, Provider::Copilot)?;
+    }
+    call_mcp_tool(
+        config_path,
+        "type_text",
+        serde_json::json!({
+            "text": prompt
+        }),
+    )?;
+    if attachment_receipt.is_empty() {
+        // Fail closed immediately before clicking Send. A stale chip appearing
+        // while trusted text entry ran must never be mixed into this request.
+        ensure_copilot_attachment_baseline(config_path)?;
+    } else {
+        ensure_copilot_attachment_receipt(config_path, attachment_receipt)?;
+    }
+
+    let click_send_js =
+        build_copilot_click_send_js(expected_copilot_attachment_count(attachment_receipt))?;
 
     let start_res = call_mcp_tool(
         config_path,
@@ -5323,6 +6413,7 @@ fn submit_prompt_to_provider(
     config_path: &str,
     provider: Provider,
     prompt: &str,
+    attachment_receipt: &AttachmentReceipt,
     verbose: bool,
 ) -> Result<String, String> {
     if provider == Provider::ChatGpt
@@ -5332,7 +6423,7 @@ fn submit_prompt_to_provider(
     }
 
     if provider == Provider::Copilot {
-        return submit_copilot_prompt(config_path, prompt, verbose);
+        return submit_copilot_prompt(config_path, prompt, attachment_receipt, verbose);
     }
 
     submit_regular_prompt(config_path, provider, prompt)
@@ -6203,18 +7294,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
     }
 
-    // Upload any attached images/files before counting messages (so the UI is ready)
-    if (!cli.images.is_empty() || !cli.files.is_empty())
-        && let Err(e) = upload_attachments_to_provider(
+    // Upload any attached images/files before counting messages (so the UI is ready).
+    // Copilot must be cleared first: clearing its React composer after an upload can
+    // detach the attachment chips that the user just selected.
+    let has_attachments = !cli.images.is_empty() || !cli.files.is_empty();
+    let mut attachment_receipt = AttachmentReceipt::default();
+    if provider == Provider::Copilot {
+        if let Err(e) = ensure_copilot_attachment_baseline(&config_path) {
+            eprintln!("Error checking Copilot attachment baseline: {}", e);
+            std::process::exit(1);
+        }
+        if has_attachments {
+            if let Err(e) = focus_and_clear_composer(&config_path, provider) {
+                eprintln!("Error preparing Copilot composer for attachments: {}", e);
+                std::process::exit(1);
+            }
+            if let Err(e) = ensure_copilot_attachment_baseline(&config_path) {
+                eprintln!(
+                    "Error re-checking Copilot attachments after clearing the composer: {}",
+                    e
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+    if has_attachments {
+        attachment_receipt = match upload_attachments_to_provider(
             &config_path,
             provider,
             &cli.images,
             &cli.files,
             command_verbose,
-        )
-    {
-        eprintln!("Error attaching images/files: {}", e);
-        std::process::exit(1);
+        ) {
+            Ok(receipt) => receipt,
+            Err(e) => {
+                eprintln!("Error attaching images/files: {}", e);
+                std::process::exit(1);
+            }
+        };
     }
 
     // Get the initial response marker count before submitting the prompt. Copilot's
@@ -6264,8 +7381,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command_verbose {
         println!("Setting prompt text and submitting...");
     }
-    let status = submit_prompt_to_provider(&config_path, provider, &prompt, command_verbose)
-        .map_err(|e| format!("Text entry or submission failed: {}", e))?;
+    let status = submit_prompt_to_provider(
+        &config_path,
+        provider,
+        &prompt,
+        &attachment_receipt,
+        command_verbose,
+    )
+    .map_err(|e| format!("Text entry or submission failed: {}", e))?;
 
     if command_verbose {
         println!("Prompt submitted successfully: {}", status);

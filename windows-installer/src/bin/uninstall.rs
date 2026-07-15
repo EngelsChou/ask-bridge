@@ -169,15 +169,57 @@ fn paths_equal(left: &Path, right: &Path) -> bool {
 }
 
 fn schedule_self_delete(path: &Path) -> Result<(), String> {
-    let command = format!(
-        "ping 127.0.0.1 -n 2 >NUL & del /F /Q \"{}\" & rmdir \"{}\" 2>NUL",
-        path.display(),
-        path.parent().unwrap_or(Path::new(".")).display()
-    );
-    Command::new("cmd.exe")
-        .args(["/D", "/S", "/C", &command])
+    let command = self_delete_command(path, std::process::id());
+    Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &command,
+        ])
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("無法排程刪除解除安裝程式：{error}"))
+}
+
+fn self_delete_command(path: &Path, parent_pid: u32) -> String {
+    let quote_literal = |value: &Path| value.to_string_lossy().replace('\'', "''");
+    let file = quote_literal(path);
+    let parent = quote_literal(path.parent().unwrap_or(Path::new(".")));
+    format!(
+        "$parentPid = {parent_pid}; \
+         while (Get-Process -Id $parentPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 200 }}; \
+         for ($attempt = 0; $attempt -lt 100; $attempt++) {{ \
+             Remove-Item -LiteralPath '{file}' -Force -ErrorAction SilentlyContinue; \
+             if (-not (Test-Path -LiteralPath '{file}')) {{ break }}; \
+             Start-Sleep -Milliseconds 200 \
+         }}; \
+         for ($attempt = 0; $attempt -lt 100; $attempt++) {{ \
+             Remove-Item -LiteralPath '{parent}' -Force -ErrorAction SilentlyContinue; \
+             if (-not (Test-Path -LiteralPath '{parent}')) {{ break }}; \
+             Start-Sleep -Milliseconds 200 \
+         }}"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn self_delete_waits_for_parent_and_retries_removal() {
+        let command = self_delete_command(
+            Path::new(r"C:\Program Files\Engels's Ask Bridge\uninstall.exe"),
+            4242,
+        );
+
+        assert!(command.contains("Get-Process -Id $parentPid"));
+        assert!(command.contains("$parentPid = 4242"));
+        assert!(command.contains("$attempt -lt 100"));
+        assert!(command.contains("Engels''s Ask Bridge"));
+        assert!(!command.contains("Start-Sleep -Milliseconds 750"));
+    }
 }
