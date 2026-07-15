@@ -57,18 +57,19 @@ cargo check
 npm test
 ```
 
-### 第四步：Git 提交並推送主分支
+### 第四步：Git 提交並推送 Copilot 發行分支
 遵照專案的 Git 規範，在提交時應將所有版本號相關的修改合併為一個單一提交，並採用 **Conventional Commits 1.0.0** 規範，日誌應提供完整的繁體中文（zh-tw）說明。
 
-此步驟只允許推送 `main`，不得建立或推送 Tag。推送前先記錄待發布 commit SHA，後續 CI 查詢、Tag 建立與一致性檢查都必須使用此不可變 SHA，不得改用等待期間可能變動的 `HEAD`。
+此 fork 的 Copilot 版本只允許推送 `main-add-m365-copilot`，不得推送或改寫 `main`，也不得在此步驟建立或推送 Tag。推送前先記錄待發布 commit SHA，後續 CI 查詢、Tag 建立與一致性檢查都必須使用此不可變 SHA，不得改用等待期間可能變動的 `HEAD`。
 
 #### 執行範例：
 ```bash
 set -euo pipefail
 
-# 1. 提交所有版本相關變更，且確認目前位於 main
-[ "$(git branch --show-current)" = "main" ] || {
-  echo "目前不在 main；禁止發布。" >&2
+# 1. 提交所有版本相關變更，且確認目前位於 Copilot 發行分支
+release_branch="main-add-m365-copilot"
+[ "$(git branch --show-current)" = "$release_branch" ] || {
+  echo "目前不在 $release_branch；禁止發布，且不得推送 main。" >&2
   exit 1
 }
 
@@ -88,7 +89,7 @@ EOF
 
 git commit -F "$commit_msg_file"
 release_commit="$(git rev-parse HEAD)"
-git push origin main
+git push origin "$release_branch"
 ```
 
 ### 第五步：等待並確認遠端 CI 成功
@@ -97,16 +98,17 @@ git push origin main
 1. Workflow 必須是 `ci.yml`，事件必須是 `push`。
 2. `headSha` 必須等於第四步保存的 `release_commit`。
 3. `status` 必須是 `completed`，`conclusion` 必須是 `success`。
-4. CI 完成後，`origin/main` 仍必須精確指向 `release_commit`。
+4. CI 完成後，`origin/main-add-m365-copilot` 仍必須精確指向 `release_commit`；`origin/main` 不得因本流程而變更。
 
 #### CI 品質閘門範例：
 ```bash
 repo="EngelsChou/ask-bridge"
+release_branch="main-add-m365-copilot"
 
-# 先確認 main push 已更新到待發布 commit
-git fetch origin main --quiet
-if [ "$(git rev-parse refs/remotes/origin/main)" != "$release_commit" ]; then
-  echo "遠端 main 與待發布 commit 不一致；禁止建立或推送 Tag。" >&2
+# 先確認 Copilot 發行分支已更新到待發布 commit
+git fetch origin "$release_branch" --quiet
+if [ "$(git rev-parse refs/remotes/origin/$release_branch)" != "$release_commit" ]; then
+  echo "遠端 $release_branch 與待發布 commit 不一致；禁止建立或推送 Tag。" >&2
   exit 1
 fi
 
@@ -126,7 +128,7 @@ for _ in $(seq 1 30); do
 done
 
 if [ -z "$ci_run_id" ]; then
-  echo "逾時仍找不到 commit $release_commit 的 main push CI；禁止建立或推送 Tag。" >&2
+  echo "逾時仍找不到 commit $release_commit 的 $release_branch push CI；禁止建立或推送 Tag。" >&2
   exit 1
 fi
 
@@ -148,10 +150,10 @@ if [ "$ci_state" != "$expected_ci_state" ]; then
   exit 1
 fi
 
-# 等待期間 main 可能已前進；正式發布只允許目前 main 的最新 commit
-git fetch origin main --quiet
-if [ "$(git rev-parse refs/remotes/origin/main)" != "$release_commit" ]; then
-  echo "CI 完成後遠端 main 已變更；應以新的 main HEAD 重新執行發布流程。" >&2
+# 等待期間發行分支可能已前進；正式發布只允許目前發行分支的最新 commit
+git fetch origin "$release_branch" --quiet
+if [ "$(git rev-parse refs/remotes/origin/$release_branch)" != "$release_commit" ]; then
+  echo "CI 完成後遠端 $release_branch 已變更；應以新的分支 HEAD 重新執行發布流程。" >&2
   exit 1
 fi
 ```
