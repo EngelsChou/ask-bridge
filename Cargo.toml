@@ -1,7 +1,8 @@
 [package]
 name = "ask-bridge"
-version = "0.2.8"
+version = "0.2.9"
 edition = "2024"
+build = "build.rs"
 
 [[bin]]
 name = "ask-bridge"
@@ -20,3 +21,6 @@ home = "0.5"
 mcp-cli = { git = "https://github.com/doggy8088/mcp-cli" }
 gag = "1.0"
 base64 = "0.21"
+
+[build-dependencies]
+winresource = "0.1.31"

@@ -92,6 +92,18 @@ irm https://raw.githubusercontent.com/doggy8088/ask-bridge/main/install.ps1 | ie
 
 輸出位於 `dist\windows\install.exe` 與 `dist\windows\uninstall.exe`，並附有各自的 SHA-256 檔案。`install.exe` 預設安裝到 `%USERPROFILE%\.local\bin` 並加入使用者 `PATH`；`uninstall.exe` 會移除程式與 PATH 項目，預設保留登入設定及 Chrome profile，搭配 `--purge` 才會一併清除。
 
+Windows SmartScreen 顯示的發行者來自 Authenticode 數位簽章。若要顯示 `Engels Chou` 而不是「不明的發行者」，建置時必須使用受 Windows 信任、主體為 Engels Chou 的程式碼簽章憑證：
+
+```powershell
+# 使用 CurrentUser\My 憑證存放區中的憑證
+.\scripts\build-windows-installers.ps1 -CertificateThumbprint "<SHA1 thumbprint>" -RequireSignature
+
+# 或使用 PFX；密碼也可放在 ASK_BRIDGE_SIGNING_CERTIFICATE_PASSWORD
+.\scripts\build-windows-installers.ps1 -CertificatePath "C:\secure\engels-chou-code-signing.pfx" -CertificatePassword "<password>" -RequireSignature
+```
+
+CI 可使用 `ASK_BRIDGE_SIGNING_CERTIFICATE_THUMBPRINT`、`ASK_BRIDGE_SIGNING_CERTIFICATE_PATH` 與 `ASK_BRIDGE_SIGNING_CERTIFICATE_PASSWORD`。未提供憑證時仍能離線封裝，但產物不會有受信任的發行者身分。
+
 > [!NOTE]
 > 請確保安裝路徑（macOS/Linux 為 `~/.local/bin`；Windows 為 `$HOME\.local\bin`）已加入您的系統 `PATH` 環境變數中。
 > 正式 CLI 命令為 `ask-bridge`；安裝流程也會提供 `ask` 作為向後相容 alias。以下範例皆以 `ask-bridge` 為準。

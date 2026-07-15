@@ -520,7 +520,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.2.8")]
+#[command(version = "0.2.9")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -6275,7 +6275,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Waiting for {} response...", provider.display_name());
     }
 
-    let mut last_markdown = String::new();
+    let last_markdown;
     let mut finished = false;
     let mut wait_cycles = 0;
     let mut stable_done_checks = 0;
@@ -6402,31 +6402,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !finished {
-        eprintln!(
-            "\nWarning: Output stream did not complete within the timeout period ({} seconds).",
+        return Err(format!(
+            "{} response did not complete within the timeout period ({} seconds)",
+            provider.display_name(),
             cli.timeout
-        );
+        )
+        .into());
     }
 
-    if finished {
-        if command_verbose {
-            println!(
-                "Copying final response from {} toolbar...",
-                provider.display_name()
-            );
-        }
-        match copy_latest_markdown(&config_path, provider) {
-            Ok(content) => {
-                last_markdown = content;
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error copying response from {} toolbar: {}",
-                    provider.display_name(),
-                    e
-                );
-            }
-        }
+    if command_verbose {
+        println!(
+            "Copying final response from {} toolbar...",
+            provider.display_name()
+        );
+    }
+    last_markdown = copy_latest_markdown(&config_path, provider).map_err(|e| {
+        format!(
+            "Failed to copy the completed response from {}: {}",
+            provider.display_name(),
+            e
+        )
+    })?;
+    if last_markdown.trim().is_empty() {
+        return Err(format!(
+            "{} completed but returned an empty response",
+            provider.display_name()
+        )
+        .into());
     }
 
     if let Err(e) = render_markdown(&last_markdown, use_glow) {
