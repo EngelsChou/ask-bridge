@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main, main-add-m365-copilot]
+  workflow_dispatch:
 
 permissions:
   contents: read
