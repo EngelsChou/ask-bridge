@@ -93,7 +93,7 @@ Download `install.exe` and `uninstall.exe` from the [latest GitHub Release](http
 The offline installer performs a user-level installation and does not require Administrator rights. It checks an existing `ask-bridge.exe` in the target directory and rejects a downgrade by default; use `install.exe --allow-downgrade` only when an intentional rollback is required.
 
 > [!IMPORTANT]
-> Do **not** run `ask-bridge update` from v0.3.0 or older. The v0.3.0 updater still points at the upstream `main` branch and can install v0.2.8. Upgrade once with the v0.3.1 `install.exe` from Releases. Only Windows builds with a pinned trusted signing fingerprint support `ask-bridge update`; update unsigned builds manually from Releases.
+> Do **not** run `ask-bridge update` from v0.3.0 or older. The v0.3.0 updater still points at the upstream `main` branch and can install v0.2.8. Upgrade once with the v0.3.2 `install.exe` from Releases. Only Windows builds with a pinned trusted signing fingerprint support `ask-bridge update`; update unsigned builds manually from Releases.
 
 The macOS/Linux script verifies the Release `.sha256` sidecar before extraction. Existing v0.3.0-or-older macOS/Linux installations have no hash-bound version record, so their one-time migration must be explicit:
 

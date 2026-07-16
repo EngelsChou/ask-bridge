@@ -6,6 +6,14 @@
 
 ---
 
+## [0.3.2] - 2026-07-16
+
+### Fixed
+- 修正 Release workflow 在 Linux/macOS PowerShell 解析 Authenticode 錯誤訊息時，因 `$path:` 未使用大括號界定而中止封裝；跨平台建置現在可繼續產生 archive、SHA-256 sidecar 與 Windows 離線安裝程式。
+- 將 CLI、npm 套件、網路安裝腳本與跨平台安裝程式版本同步為 `0.3.2`。
+
+---
+
 ## [0.3.1] - 2026-07-16
 
 ### Fixed

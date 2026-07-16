@@ -7,7 +7,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 CYAN='\033[0;36m'
 NC='\033[0m' # No Color
-VERSION="0.3.1"
+VERSION="0.3.2"
 
 compare_release_versions() {
     local left="${1#v}"

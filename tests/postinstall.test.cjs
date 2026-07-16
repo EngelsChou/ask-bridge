@@ -279,6 +279,8 @@ test('release publishing supports explicit unsigned fallback and never mutates p
   assert.match(workflow, /publishing unsigned Windows executables/);
   assert.match(workflow, /ASK_BRIDGE_RELEASE_REQUIRE_SIGNATURE=true/);
   assert.match(workflow, /publisher must be exactly 'Engels Chou'/);
+  assert.doesNotMatch(workflow, /\$path:/);
+  assert.match(workflow, /\$\{path\}:/);
   assert.match(workflow, /build-windows-installers\.ps1 -OutputDirectory dist -RequireSignature/);
   assert.match(workflow, /build-windows-installers\.ps1 -OutputDirectory dist\r?\n/);
   assert.ok(

@@ -602,7 +602,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.1")]
+#[command(version = "0.3.2")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
