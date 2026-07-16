@@ -6,6 +6,14 @@
 
 ---
 
+## [0.3.3] - 2026-07-16
+
+### Fixed
+- 將 npm Trusted Publishing 改為由 repository variable `ASK_BRIDGE_NPM_PUBLISH_ENABLED=true` 明確啟用；未設定 npm 信任關係時仍可獨立完成 GitHub Release 與安裝檔發布。
+- 將 CLI、npm 套件、網路安裝腳本與跨平台安裝程式版本同步為 `0.3.3`。
+
+---
+
 ## [0.3.2] - 2026-07-16
 
 ### Fixed

@@ -289,6 +289,7 @@ test('release publishing supports explicit unsigned fallback and never mutates p
   );
   assert.match(workflow, /already published; verify it without mutating public assets/);
   assert.match(workflow, /GH_REPO: \$\{\{ github\.repository \}\}/);
+  assert.match(workflow, /if: vars\.ASK_BRIDGE_NPM_PUBLISH_ENABLED == 'true'/);
   assert.match(workflow, /gh workflow run npm-publish\.yml --ref "\$TAG"/);
   assert.match(workflow, /gh run watch "\$run_id" --exit-status/);
 });
