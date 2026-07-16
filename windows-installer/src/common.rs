@@ -8,8 +8,12 @@ use std::io::{self, Write};
 use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 type Hkey = *mut c_void;
+type Handle = *mut c_void;
 
 const HKEY_CURRENT_USER: Hkey = 0x80000001usize as Hkey;
 const KEY_QUERY_VALUE: u32 = 0x0001;
@@ -21,6 +25,17 @@ const ERROR_FILE_NOT_FOUND: i32 = 2;
 const HWND_BROADCAST: isize = 0xffff;
 const WM_SETTINGCHANGE: u32 = 0x001a;
 const SMTO_ABORTIFHUNG: u32 = 0x0002;
+const GENERIC_READ: u32 = 0x8000_0000;
+const GENERIC_WRITE: u32 = 0x4000_0000;
+const OPEN_ALWAYS: u32 = 4;
+const FILE_ATTRIBUTE_HIDDEN: u32 = 0x0000_0002;
+const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
+const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
+const ERROR_SHARING_VIOLATION: i32 = 32;
+const ERROR_LOCK_VIOLATION: i32 = 33;
+const INVALID_HANDLE_VALUE: Handle = -1_isize as Handle;
+
+static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[link(name = "advapi32")]
 unsafe extern "system" {
@@ -66,6 +81,17 @@ unsafe extern "system" {
 #[link(name = "kernel32")]
 unsafe extern "system" {
     fn GetConsoleProcessList(process_list: *mut u32, process_count: u32) -> u32;
+    fn CreateFileW(
+        file_name: *const u16,
+        desired_access: u32,
+        share_mode: u32,
+        security_attributes: *const c_void,
+        creation_disposition: u32,
+        flags_and_attributes: u32,
+        template_file: Handle,
+    ) -> Handle;
+    fn CloseHandle(handle: Handle) -> i32;
+    fn MoveFileExW(existing_file_name: *const u16, new_file_name: *const u16, flags: u32) -> i32;
 }
 
 struct RegistryKey(Hkey);
@@ -75,6 +101,23 @@ impl Drop for RegistryKey {
         unsafe {
             RegCloseKey(self.0);
         }
+    }
+}
+
+pub struct InstallLock {
+    handle: Handle,
+    path: PathBuf,
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        unsafe {
+            CloseHandle(self.handle);
+        }
+        // Another waiting installer may acquire the file between CloseHandle
+        // and this best-effort cleanup.  In that case Windows correctly keeps
+        // the path and the waiter still owns the exclusive handle.
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -234,6 +277,59 @@ pub fn default_install_dir() -> Result<PathBuf, String> {
     Ok(PathBuf::from(home).join(".local").join("bin"))
 }
 
+pub fn acquire_install_lock(install_dir: &Path) -> Result<InstallLock, String> {
+    let parent = install_dir
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).map_err(|error| {
+        format!(
+            "Failed to prepare installer lock directory {}: {error}",
+            parent.display()
+        )
+    })?;
+    let mut lock_name = install_dir.as_os_str().to_os_string();
+    lock_name.push(".ask-bridge.install.lock");
+    let path = PathBuf::from(lock_name);
+    let wide_path = wide_null(path.as_os_str());
+    let deadline = Instant::now() + Duration::from_secs(60);
+
+    loop {
+        let handle = unsafe {
+            CreateFileW(
+                wide_path.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                0,
+                ptr::null(),
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_HIDDEN,
+                ptr::null_mut(),
+            )
+        };
+        if handle != INVALID_HANDLE_VALUE {
+            return Ok(InstallLock { handle, path });
+        }
+
+        let error = io::Error::last_os_error();
+        if !matches!(
+            error.raw_os_error(),
+            Some(ERROR_SHARING_VIOLATION) | Some(ERROR_LOCK_VIOLATION)
+        ) {
+            return Err(format!(
+                "Failed to acquire installer lock {}: {error}",
+                path.display()
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "Timed out waiting for another Ask Bridge installer to finish ({}).",
+                path.display()
+            ));
+        }
+        thread::sleep(Duration::from_millis(200));
+    }
+}
+
 #[allow(dead_code)]
 pub fn default_config_dir() -> Result<PathBuf, String> {
     let home = env::var_os("USERPROFILE")
@@ -247,23 +343,35 @@ pub fn write_embedded_file(path: &Path, contents: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    let sequence = TEMPORARY_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
     let extension = path
         .extension()
         .and_then(OsStr::to_str)
-        .map(|value| format!("{value}.tmp-{}", std::process::id()))
-        .unwrap_or_else(|| format!("tmp-{}", std::process::id()));
+        .map(|value| format!("{value}.tmp-{}-{sequence}", std::process::id()))
+        .unwrap_or_else(|| format!("tmp-{}-{sequence}", std::process::id()));
     let temporary = path.with_extension(extension);
     let _ = fs::remove_file(&temporary);
     fs::write(&temporary, contents)?;
 
-    if path.exists() {
-        fs::remove_file(path)?;
+    let temporary_wide = wide_null(temporary.as_os_str());
+    let destination_wide = wide_null(path.as_os_str());
+    let mut last_error = None;
+    for _ in 0..10 {
+        if unsafe {
+            MoveFileExW(
+                temporary_wide.as_ptr(),
+                destination_wide.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } != 0
+        {
+            return Ok(());
+        }
+        last_error = Some(io::Error::last_os_error());
+        thread::sleep(Duration::from_millis(200));
     }
-    if let Err(error) = fs::rename(&temporary, path) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    Ok(())
+    let _ = fs::remove_file(&temporary);
+    Err(last_error.unwrap_or_else(io::Error::last_os_error))
 }
 
 #[allow(dead_code)]

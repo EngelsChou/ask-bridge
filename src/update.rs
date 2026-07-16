@@ -3,6 +3,8 @@ use std::process::{Command, ExitStatus};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod update_policy;
+
 #[derive(Parser)]
 #[command(name = "ask-bridge-update")]
 #[command(about = "Internal updater for ask-bridge")]
@@ -63,23 +65,22 @@ fn run_update_command() -> Result<(), String> {
     println!("ask-bridge-update: launching official installer...");
 
     #[cfg(target_os = "windows")]
-    let status = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex",
-        ])
-        .status()
-        .map_err(|e| format!("Failed to run Windows update command: {}", e))?;
+    let status = {
+        let update_command = update_policy::windows_update_command(env!("CARGO_PKG_VERSION"));
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", update_command.as_str()])
+            .status()
+            .map_err(|e| format!("Failed to run Windows update command: {}", e))?
+    };
 
     #[cfg(not(target_os = "windows"))]
-    let status = Command::new("sh")
-        .args([
-            "-c",
-            "curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash",
-        ])
-        .status()
-        .map_err(|e| format!("Failed to run macOS/Linux update command: {}", e))?;
+    let status = {
+        let update_command = update_policy::unix_update_command(env!("CARGO_PKG_VERSION"));
+        Command::new("bash")
+            .args(["-c", update_command.as_str()])
+            .status()
+            .map_err(|e| format!("Failed to run macOS/Linux update command: {}", e))?
+    };
 
     report_status(status)
 }
@@ -117,10 +118,10 @@ fn is_process_running(pid: u32) -> bool {
             return false;
         }
         let pid_field = trimmed.split_whitespace().nth(1);
-        if let Some(pid_field) = pid_field {
-            if let Ok(value) = pid_field.parse::<u32>() {
-                return value == pid;
-            }
+        if let Some(pid_field) = pid_field
+            && let Ok(value) = pid_field.parse::<u32>()
+        {
+            return value == pid;
         }
     }
 

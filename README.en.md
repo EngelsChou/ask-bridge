@@ -78,14 +78,30 @@ If you only want to use the pre-compiled Release version (without installing the
 #### macOS / Linux
 Open your terminal and run:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main-add-m365-copilot/install.sh | bash
 ```
 
 #### Windows
-Open PowerShell (recommended to Run as Administrator) and run:
+Open a normal, non-administrator PowerShell session and open the Release page:
+
 ```powershell
-irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex
+Start-Process "https://github.com/EngelsChou/ask-bridge/releases/latest"
 ```
+
+Download `install.exe` and `uninstall.exe` from the [latest GitHub Release](https://github.com/EngelsChou/ask-bridge/releases/latest). When a digital signature is present, you can verify it under **Properties → Digital Signatures**. If no Authenticode certificate is configured, the workflow still publishes unsigned Windows installers and Windows may show an unknown-publisher warning.
+
+The offline installer performs a user-level installation and does not require Administrator rights. It checks an existing `ask-bridge.exe` in the target directory and rejects a downgrade by default; use `install.exe --allow-downgrade` only when an intentional rollback is required.
+
+> [!IMPORTANT]
+> Do **not** run `ask-bridge update` from v0.3.0 or older. The v0.3.0 updater still points at the upstream `main` branch and can install v0.2.8. Upgrade once with the v0.3.1 `install.exe` from Releases. Only Windows builds with a pinned trusted signing fingerprint support `ask-bridge update`; update unsigned builds manually from Releases.
+
+The macOS/Linux script verifies the Release `.sha256` sidecar before extraction. Existing v0.3.0-or-older macOS/Linux installations have no hash-bound version record, so their one-time migration must be explicit:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main-add-m365-copilot/install.sh | ASK_BRIDGE_ALLOW_DOWNGRADE=1 bash
+```
+
+After that migration, the installer holds a per-install-directory lock, atomically replaces the binary, and binds the recorded version to the installed binary SHA-256. Normal upgrades do not require the override.
 
 > [!NOTE]
 > Make sure the installation path (`~/.local/bin` for macOS/Linux, and `$HOME\.local\bin` for Windows) is added to your system's `PATH` environment variable.
@@ -96,6 +112,8 @@ irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | i
 Clone or navigate to the project directory and build/install with Make:
 
 ```bash
+git clone --branch main-add-m365-copilot --single-branch https://github.com/EngelsChou/ask-bridge.git
+cd ask-bridge
 make install
 ```
 
@@ -118,13 +136,13 @@ This repository provides an `ask-bridge` Agent Skill so Skills-compatible Coding
 Install it with `npx skills`; you do not need to copy the `skills/` directory manually:
 
 ```bash
-npx skills add EngelsChou/ask-bridge --skill ask-bridge
+npx skills add https://github.com/EngelsChou/ask-bridge/tree/main-add-m365-copilot/skills/ask-bridge
 ```
 
 To install it globally for Codex, specify the agent and global scope:
 
 ```bash
-npx skills add EngelsChou/ask-bridge --skill ask-bridge --agent codex --global
+npx skills add https://github.com/EngelsChou/ask-bridge/tree/main-add-m365-copilot/skills/ask-bridge --agent codex --global
 ```
 
 ---

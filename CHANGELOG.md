@@ -6,6 +6,19 @@
 
 ---
 
+## [0.3.1] - 2026-07-16
+
+### Fixed
+- 將原始碼 clone 與 Agent Skill 入口固定到 `main-add-m365-copilot`；Windows 更新器改為下載最新版 Release 的 `install.exe`，驗證 TLS、有效的 Engels Chou Authenticode 簽章、內嵌憑證 SHA-256 指紋與版本下限後才執行，不再遠端執行 mutable branch script。
+- 網路安裝腳本會下載 Release archive 對應的 `.sha256` sidecar，確認檔名及 SHA-256 後才解壓縮。
+- PowerShell、macOS/Linux 及離線 Windows 安裝器加入安裝目錄排他鎖與原子替換；macOS/Linux 的版本紀錄另綁定 binary SHA-256，避免並行安裝或中斷造成錯誤降版。
+- 離線 `install.exe` 會以 Windows 版本資源（不執行既有 binary）檢查既有版本並預設拒絕降版；只有明確指定 `--allow-downgrade` 才允許回退。
+- Release workflow 在提供受信任 Engels Chou PFX 時會簽署並重驗 payload、ZIP 與安裝檔；未提供憑證時仍發布未簽章 Windows 檔案，並保留 SHA-256 與 installer smoke test。已發布 Release 重跑只驗證、不覆寫公開資產，並明確 dispatch 及監看 npm Trusted Publishing workflow。
+- 修正從 VS Code MCP 首次登入 Microsoft 365 Copilot 時，新啟動的 Chrome 仍可能沿用背景 profile 的離屏視窗位置，導致工作列只閃現白色視窗卻無法開啟；現在會在確認 Chrome 程序與除錯連接埠身分後，再將 headful 視窗復位到可見桌面。
+- 將 CLI、npm 套件與跨平台安裝程式版本同步為 `0.3.1`，並加入分支與版本一致性測試。
+
+---
+
 ## [0.3.0] - 2026-07-15
 
 ### 🚀 新增 (Added)

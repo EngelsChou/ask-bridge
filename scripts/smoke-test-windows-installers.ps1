@@ -46,10 +46,28 @@ try {
     if (-not $VersionMatch.Success) {
         throw "Could not read the expected version from Cargo.toml."
     }
-    $ExpectedVersion = "ask-bridge $($VersionMatch.Groups[1].Value)"
+    $ExpectedReleaseVersion = $VersionMatch.Groups[1].Value
+    $ExpectedVersion = "ask-bridge $ExpectedReleaseVersion"
     $InstalledVersion = (& $InstalledBinary --version).Trim()
     if ($LASTEXITCODE -ne 0 -or $InstalledVersion -ne $ExpectedVersion) {
         throw "Installed version mismatch. Expected '$ExpectedVersion', found '$InstalledVersion'."
+    }
+
+    $VersionedFiles = @(
+        $Installer,
+        $InstalledBinary,
+        (Join-Path $Target "ask.exe"),
+        (Join-Path $Target "ask-bridge-update.exe"),
+        $InstalledUninstaller
+    )
+    foreach ($VersionedFile in $VersionedFiles) {
+        $VersionInfo = (Get-Item -LiteralPath $VersionedFile).VersionInfo
+        if ($VersionInfo.FileVersion -ne $ExpectedReleaseVersion -or $VersionInfo.ProductVersion -ne $ExpectedReleaseVersion) {
+            throw "Windows version resource mismatch for $VersionedFile. Expected $ExpectedReleaseVersion, found FileVersion=$($VersionInfo.FileVersion) ProductVersion=$($VersionInfo.ProductVersion)."
+        }
+        if ($VersionInfo.CompanyName -ne "Engels Chou") {
+            throw "Windows CompanyName mismatch for $VersionedFile. Expected 'Engels Chou', found '$($VersionInfo.CompanyName)'."
+        }
     }
 
     & $InstalledUninstaller --install-dir $Target --no-path --quiet
@@ -65,8 +83,10 @@ try {
         throw "Uninstaller did not remove its install directory. Remaining: $Remaining"
     }
 
-    # Reinstall and exercise the direct-launch pause path. The self-delete helper
-    # must keep waiting while uninstall.exe is locked, then remove it after Enter.
+    # Reinstall and exercise the direct-launch pause plus overlapping reinstall.
+    # The running uninstaller must rename itself to a unique tombstone before it
+    # releases the install lock. A new installer may then safely create a fresh
+    # uninstall.exe, and the old helper must delete only the tombstone.
     & $Installer --install-dir $Target --no-path --quiet
     if ($LASTEXITCODE -ne 0) {
         throw "install.exe exited with code $LASTEXITCODE during the interactive uninstall test"
@@ -95,9 +115,22 @@ try {
             $EarlyError = $UninstallProcess.StandardError.ReadToEnd()
             throw "Interactive uninstaller exited before Enter. Output: $EarlyOutput Error: $EarlyError"
         }
-        if (-not (Test-Path -LiteralPath $InstalledUninstaller -PathType Leaf)) {
-            throw "Interactive uninstaller was deleted while it was still running."
+        if (Test-Path -LiteralPath $InstalledUninstaller -PathType Leaf) {
+            throw "Interactive uninstaller did not move itself away from the canonical reinstall path."
         }
+        $Tombstones = @(Get-ChildItem -LiteralPath $Target -Filter "uninstall.exe.delete-*" -File)
+        if ($Tombstones.Count -ne 1) {
+            throw "Expected one running-uninstaller tombstone, found $($Tombstones.Count)."
+        }
+
+        & $Installer --install-dir $Target --no-path --quiet
+        if ($LASTEXITCODE -ne 0) {
+            throw "Concurrent reinstall exited with code $LASTEXITCODE"
+        }
+        if (-not (Test-Path -LiteralPath $InstalledUninstaller -PathType Leaf)) {
+            throw "Concurrent reinstall did not create a fresh uninstall.exe."
+        }
+        $ReinstalledUninstallerHash = (Get-FileHash -LiteralPath $InstalledUninstaller -Algorithm SHA256).Hash
 
         $UninstallProcess.StandardInput.WriteLine()
         $UninstallProcess.StandardInput.Close()
@@ -117,12 +150,36 @@ try {
         $UninstallProcess.Dispose()
     }
 
+    for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
+        $RemainingTombstones = @(Get-ChildItem -LiteralPath $Target -Filter "uninstall.exe.delete-*" -File -ErrorAction SilentlyContinue)
+        if ($RemainingTombstones.Count -eq 0) {
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    $RemainingTombstones = @(Get-ChildItem -LiteralPath $Target -Filter "uninstall.exe.delete-*" -File -ErrorAction SilentlyContinue)
+    if ($RemainingTombstones.Count -ne 0) {
+        throw "Old interactive uninstaller tombstone was not removed."
+    }
+    foreach ($ReinstalledPath in @((Join-Path $Target "ask-bridge.exe"), $InstalledUninstaller)) {
+        if (-not (Test-Path -LiteralPath $ReinstalledPath -PathType Leaf)) {
+            throw "Old self-delete helper removed a newly installed file: $ReinstalledPath"
+        }
+    }
+    if ((Get-FileHash -LiteralPath $InstalledUninstaller -Algorithm SHA256).Hash -ne $ReinstalledUninstallerHash) {
+        throw "Old self-delete helper replaced or modified the newly installed uninstaller."
+    }
+
+    & $InstalledUninstaller --install-dir $Target --no-path --quiet
+    if ($LASTEXITCODE -ne 0) {
+        throw "Final cleanup uninstaller exited with code $LASTEXITCODE"
+    }
     for ($Attempt = 0; $Attempt -lt 40 -and (Test-Path -LiteralPath $Target); $Attempt++) {
         Start-Sleep -Milliseconds 250
     }
     if (Test-Path -LiteralPath $Target) {
         $Remaining = (Get-ChildItem -LiteralPath $Target -Force | Select-Object -ExpandProperty Name) -join ", "
-        throw "Interactive uninstaller did not remove its install directory. Remaining: $Remaining"
+        throw "Final cleanup did not remove the install directory. Remaining: $Remaining"
     }
 
     Write-Host "Windows installer smoke test passed: $InstalledVersion" -ForegroundColor Green

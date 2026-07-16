@@ -11,10 +11,17 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod update_policy;
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 const ASK_BRIDGE_CHROME_MARKER: &str = "--ask-bridge-instance";
+const CHROME_WINDOW_SIZE_ARG: &str = "--window-size=1440,1200";
+const CHROME_VISIBLE_WINDOW_POSITION_ARG: &str = "--window-position=80,80";
+const CHROME_BACKGROUND_WINDOW_POSITION_ARG: &str = "--window-position=-2000,-2000";
+const CHROME_VISIBLE_WINDOW_X: i32 = 80;
+const CHROME_VISIBLE_WINDOW_Y: i32 = 80;
 const COPILOT_ATTACHMENT_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const COPILOT_ATTACHMENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const COPILOT_ATTACHMENT_INDICATOR_SELECTOR: &str = concat!(
@@ -595,7 +602,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.0")]
+#[command(version = "0.3.1")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -837,56 +844,48 @@ fn run_update_command() -> Result<(), String> {
     println!("Progress: downloading installer and updating binary.");
 
     #[cfg(target_os = "windows")]
-    let status = {
-        let current_exe = std::env::current_exe()
-            .map_err(|e| format!("Failed to locate current executable path: {}", e))?;
-        let update_exe = current_exe
-            .parent()
-            .ok_or_else(|| "Failed to determine ask-bridge executable directory".to_string())?
-            .join("ask-bridge-update.exe");
-
-        if update_exe.exists() {
-            let child = Command::new(update_exe)
-                .arg(format!("--parent-pid={}", std::process::id()))
-                .arg("--wait-seconds=30")
-                .stdout(Stdio::inherit())
-                .stderr(Stdio::inherit())
-                .spawn()
-                .map_err(|e| format!("Failed to launch ask-bridge-update.exe: {}", e))?;
-            println!("Progress: updater started with PID {}.", child.id());
-            println!("Progress: update command is running in background.");
-            return Ok(());
-        }
-
-        println!("ask-bridge-update.exe not found. Falling back to inline installer.");
-        Command::new("powershell")
+    {
+        // Never execute an adjacent helper of unknown version or provenance.
+        // The detached PowerShell process holds an identity-bound Process
+        // handle, waits for this executable to exit, then downloads and
+        // verifies the signed installer using the compiled update policy.
+        let update_command = update_policy::windows_update_command_after_parent(
+            env!("CARGO_PKG_VERSION"),
+            std::process::id(),
+        );
+        let child = Command::new("powershell")
             .args([
                 "-NoProfile",
+                "-NonInteractive",
                 "-Command",
-                "irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex",
+                update_command.as_str(),
             ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("Failed to launch signed Windows updater: {}", e))?;
+        println!("Progress: signed updater started with PID {}.", child.id());
+        println!("Progress: update command is running in background.");
+        Ok(())
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let update_command = update_policy::unix_update_command(env!("CARGO_PKG_VERSION"));
+        let status = Command::new("bash")
+            .args(["-c", update_command.as_str()])
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .status()
-            .map_err(|e| format!("Failed to run Windows update command: {}", e))?
-    };
+            .map_err(|e| format!("Failed to run macOS/Linux update command: {}", e))?;
 
-    #[cfg(not(target_os = "windows"))]
-    let status = Command::new("sh")
-        .args([
-            "-c",
-            "curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash",
-        ])
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|e| format!("Failed to run macOS/Linux update command: {}", e))?;
-
-    if status.success() {
-        println!("Progress: update command completed.");
-        Ok(())
-    } else {
-        Err(format!("Update command failed with exit status {}", status))
+        if status.success() {
+            println!("Progress: update command completed.");
+            Ok(())
+        } else {
+            Err(format!("Update command failed with exit status {}", status))
+        }
     }
 }
 
@@ -1334,6 +1333,573 @@ fn find_chrome_path() -> Result<String, String> {
     }
 }
 
+fn chrome_window_launch_args(headless: bool) -> &'static [&'static str] {
+    if headless {
+        &[
+            "--ask-bridge-background",
+            "--disable-blink-features=AutomationControlled",
+            CHROME_WINDOW_SIZE_ARG,
+            CHROME_BACKGROUND_WINDOW_POSITION_ARG,
+        ]
+    } else {
+        &[CHROME_WINDOW_SIZE_ARG, CHROME_VISIBLE_WINDOW_POSITION_ARG]
+    }
+}
+
+fn chrome_window_candidate_pids(snapshot: &ChromeDebugSnapshot) -> Vec<u32> {
+    let mut pids = Vec::new();
+
+    // The raw netstat/lsof listener list is not an identity proof. Only trust the
+    // recorded PID when both its CDP browser id and its sole listener PID match,
+    // plus owner PIDs which were independently verified from Chrome's command line.
+    if chrome_record_matches_current(
+        snapshot.record.as_ref(),
+        snapshot.browser_id.as_deref(),
+        &snapshot.listener_pids,
+    ) && let Some(record) = snapshot.record.as_ref()
+    {
+        pids.push(record.pid);
+    }
+
+    for candidate in &snapshot.ask_pids {
+        if let Ok(pid) = candidate.parse::<u32>()
+            && !pids.contains(&pid)
+        {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+#[cfg(target_os = "windows")]
+fn chrome_image_paths_match(actual: &str, expected: &str) -> bool {
+    const CSTR_EQUAL: i32 = 2;
+    if actual.is_empty() || expected.is_empty() {
+        return false;
+    }
+
+    let actual: Vec<u16> = actual.encode_utf16().collect();
+    let expected: Vec<u16> = expected.encode_utf16().collect();
+    let (Ok(actual_length), Ok(expected_length)) =
+        (i32::try_from(actual.len()), i32::try_from(expected.len()))
+    else {
+        return false;
+    };
+    (unsafe {
+        CompareStringOrdinal(
+            actual.as_ptr(),
+            actual_length,
+            expected.as_ptr(),
+            expected_length,
+            1,
+        )
+    }) == CSTR_EQUAL
+}
+
+#[cfg(all(not(target_os = "windows"), test))]
+fn chrome_image_paths_match(actual: &str, expected: &str) -> bool {
+    !actual.is_empty() && !expected.is_empty() && actual.to_lowercase() == expected.to_lowercase()
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn chrome_window_matches_predicate(
+    pid_is_validated: bool,
+    class_name: &str,
+    has_owner: bool,
+    title_length: usize,
+) -> bool {
+    pid_is_validated && class_name == "Chrome_WidgetWin_1" && !has_owner && title_length > 0
+}
+
+#[cfg(any(target_os = "windows", test))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ScreenRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn screen_rects_intersect(left: ScreenRect, right: ScreenRect) -> bool {
+    left.left < left.right
+        && left.top < left.bottom
+        && right.left < right.right
+        && right.top < right.bottom
+        && left.left < right.right
+        && left.right > right.left
+        && left.top < right.bottom
+        && left.bottom > right.top
+}
+
+fn apply_chrome_window_mode_with<F>(
+    headless: bool,
+    snapshot: &ChromeDebugSnapshot,
+    mut make_visible: F,
+) -> Result<(), String>
+where
+    F: FnMut(&[u32]) -> Result<(), String>,
+{
+    if headless {
+        return Ok(());
+    }
+
+    let pids = chrome_window_candidate_pids(snapshot);
+    if pids.is_empty() {
+        return Err(
+            "Chrome is listening on port 9223, but its window process could not be identified"
+                .to_string(),
+        );
+    }
+    make_visible(&pids)
+}
+
+#[cfg(target_os = "windows")]
+type NativeWindowHandle = *mut std::ffi::c_void;
+
+#[cfg(target_os = "windows")]
+type NativeProcessHandle = *mut std::ffi::c_void;
+
+#[cfg(target_os = "windows")]
+type NativeMonitorHandle = *mut std::ffi::c_void;
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+struct NativeRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+#[cfg(target_os = "windows")]
+impl From<NativeRect> for ScreenRect {
+    fn from(rect: NativeRect) -> Self {
+        Self {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[repr(C)]
+struct NativeMonitorInfo {
+    size: u32,
+    monitor: NativeRect,
+    work: NativeRect,
+    flags: u32,
+}
+
+#[cfg(target_os = "windows")]
+struct ValidatedChromeProcess {
+    pid: u32,
+    handle: NativeProcessHandle,
+}
+
+#[cfg(target_os = "windows")]
+impl Drop for ValidatedChromeProcess {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                CloseHandle(self.handle);
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+struct VisibleWindowContext<'a> {
+    processes: &'a [ValidatedChromeProcess],
+    moved: bool,
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn CompareStringOrdinal(
+        first: *const u16,
+        first_length: i32,
+        second: *const u16,
+        second_length: i32,
+        ignore_case: i32,
+    ) -> i32;
+    fn OpenProcess(access: u32, inherit_handle: i32, process_id: u32) -> NativeProcessHandle;
+    fn QueryFullProcessImageNameW(
+        process: NativeProcessHandle,
+        flags: u32,
+        executable_name: *mut u16,
+        size: *mut u32,
+    ) -> i32;
+    fn CloseHandle(object: NativeProcessHandle) -> i32;
+    fn WaitForSingleObject(object: NativeProcessHandle, timeout_ms: u32) -> u32;
+}
+
+#[cfg(target_os = "windows")]
+#[link(name = "user32")]
+unsafe extern "system" {
+    fn EnumWindows(
+        callback: Option<unsafe extern "system" fn(NativeWindowHandle, isize) -> i32>,
+        parameter: isize,
+    ) -> i32;
+    fn GetWindowThreadProcessId(window: NativeWindowHandle, pid: *mut u32) -> u32;
+    fn GetClassNameW(window: NativeWindowHandle, class_name: *mut u16, max_count: i32) -> i32;
+    fn GetWindow(window: NativeWindowHandle, command: u32) -> NativeWindowHandle;
+    fn SendMessageTimeoutW(
+        window: NativeWindowHandle,
+        message: u32,
+        wparam: usize,
+        lparam: isize,
+        flags: u32,
+        timeout_ms: u32,
+        result: *mut usize,
+    ) -> isize;
+    fn SetWindowPos(
+        window: NativeWindowHandle,
+        insert_after: NativeWindowHandle,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        flags: u32,
+    ) -> i32;
+    fn SetForegroundWindow(window: NativeWindowHandle) -> i32;
+    fn ShowWindowAsync(window: NativeWindowHandle, command: i32) -> i32;
+    fn IsWindowVisible(window: NativeWindowHandle) -> i32;
+    fn GetWindowRect(window: NativeWindowHandle, rect: *mut NativeRect) -> i32;
+    fn MonitorFromRect(rect: *const NativeRect, flags: u32) -> NativeMonitorHandle;
+    fn GetMonitorInfoW(monitor: NativeMonitorHandle, info: *mut NativeMonitorInfo) -> i32;
+}
+
+#[cfg(target_os = "windows")]
+fn query_full_process_image_name(process: NativeProcessHandle) -> Option<String> {
+    // Windows' maximum extended path is 32,767 UTF-16 code units. Keep the
+    // process handle alive after this query so its PID cannot be recycled while
+    // EnumWindows is matching the corresponding top-level window.
+    let mut path = vec![0_u16; 32_768];
+    let mut length = u32::try_from(path.len()).ok()?;
+    if unsafe { QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut length) } == 0 {
+        return None;
+    }
+    let length = usize::try_from(length).ok()?;
+    (length > 0 && length <= path.len())
+        .then(|| String::from_utf16(&path[..length]).ok())
+        .flatten()
+}
+
+#[cfg(target_os = "windows")]
+fn open_validated_chrome_processes(
+    pids: &[u32],
+    expected_chrome_path: &str,
+) -> Vec<ValidatedChromeProcess> {
+    const PROCESS_QUERY_LIMITED_INFORMATION: u32 = 0x1000;
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+
+    let mut processes = Vec::new();
+    for &pid in pids {
+        let handle =
+            unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, 0, pid) };
+        if handle.is_null() {
+            continue;
+        }
+
+        let process = ValidatedChromeProcess { pid, handle };
+        if query_full_process_image_name(process.handle)
+            .as_deref()
+            .is_some_and(|path| chrome_image_paths_match(path, expected_chrome_path))
+        {
+            processes.push(process);
+        }
+    }
+    processes
+}
+
+#[cfg(target_os = "windows")]
+fn validated_chrome_process_is_running(process: &ValidatedChromeProcess) -> bool {
+    const WAIT_TIMEOUT: u32 = 0x0000_0102;
+    (unsafe { WaitForSingleObject(process.handle, 0) }) == WAIT_TIMEOUT
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn chrome_window_class_name(window: NativeWindowHandle) -> Option<String> {
+    let mut class_name = [0_u16; 256];
+    let length = unsafe {
+        GetClassNameW(
+            window,
+            class_name.as_mut_ptr(),
+            i32::try_from(class_name.len()).ok()?,
+        )
+    };
+    let length = usize::try_from(length).ok()?;
+    (length > 0)
+        .then(|| String::from_utf16(&class_name[..length]).ok())
+        .flatten()
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn chrome_window_title_length(window: NativeWindowHandle) -> Option<usize> {
+    const WM_GETTEXTLENGTH: u32 = 0x000e;
+    const SMTO_BLOCK: u32 = 0x0001;
+    const SMTO_ABORTIFHUNG: u32 = 0x0002;
+    const TITLE_QUERY_TIMEOUT_MS: u32 = 100;
+
+    let mut length = 0_usize;
+    (unsafe {
+        SendMessageTimeoutW(
+            window,
+            WM_GETTEXTLENGTH,
+            0,
+            0,
+            SMTO_BLOCK | SMTO_ABORTIFHUNG,
+            TITLE_QUERY_TIMEOUT_MS,
+            &mut length,
+        )
+    } != 0)
+        .then_some(length)
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn chrome_window_is_onscreen(window: NativeWindowHandle) -> bool {
+    const MONITOR_DEFAULTTONULL: u32 = 0;
+
+    if unsafe { IsWindowVisible(window) } == 0 {
+        return false;
+    }
+
+    let mut window_rect = NativeRect::default();
+    if unsafe { GetWindowRect(window, &mut window_rect) } == 0 {
+        return false;
+    }
+    let monitor = unsafe { MonitorFromRect(&window_rect, MONITOR_DEFAULTTONULL) };
+    if monitor.is_null() {
+        return false;
+    }
+
+    let mut monitor_info = NativeMonitorInfo {
+        size: std::mem::size_of::<NativeMonitorInfo>() as u32,
+        monitor: NativeRect::default(),
+        work: NativeRect::default(),
+        flags: 0,
+    };
+    (unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }) != 0
+        && screen_rects_intersect(window_rect.into(), monitor_info.monitor.into())
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn move_visible_chrome_window_callback(
+    window: NativeWindowHandle,
+    parameter: isize,
+) -> i32 {
+    let context = unsafe { &mut *(parameter as *mut VisibleWindowContext) };
+    let mut pid = 0_u32;
+    unsafe {
+        GetWindowThreadProcessId(window, &mut pid);
+    }
+    let pid_is_validated = context
+        .processes
+        .iter()
+        .any(|process| process.pid == pid && validated_chrome_process_is_running(process));
+    if !pid_is_validated {
+        return 1;
+    }
+    let Some(class_name) = (unsafe { chrome_window_class_name(window) }) else {
+        return 1;
+    };
+    const GW_OWNER: u32 = 4;
+    let has_owner = !(unsafe { GetWindow(window, GW_OWNER) }).is_null();
+    let Some(title_length) = (unsafe { chrome_window_title_length(window) }) else {
+        return 1;
+    };
+    if !chrome_window_matches_predicate(pid_is_validated, &class_name, has_owner, title_length) {
+        return 1;
+    }
+
+    const SW_RESTORE: i32 = 9;
+    const SWP_NOSIZE: u32 = 0x0001;
+    const SWP_NOZORDER: u32 = 0x0004;
+    const SWP_SHOWWINDOW: u32 = 0x0040;
+    const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
+    unsafe {
+        ShowWindowAsync(window, SW_RESTORE);
+    }
+    let moved = unsafe {
+        SetWindowPos(
+            window,
+            std::ptr::null_mut(),
+            CHROME_VISIBLE_WINDOW_X,
+            CHROME_VISIBLE_WINDOW_Y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
+        )
+    } != 0;
+    if moved && unsafe { chrome_window_is_onscreen(window) } {
+        context.moved = true;
+        unsafe {
+            SetForegroundWindow(window);
+        }
+        return 0;
+    }
+    1
+}
+
+#[cfg(target_os = "windows")]
+fn try_move_chrome_window_to_visible_position(processes: &[ValidatedChromeProcess]) -> bool {
+    let mut context = VisibleWindowContext {
+        processes,
+        moved: false,
+    };
+    unsafe {
+        EnumWindows(
+            Some(move_visible_chrome_window_callback),
+            (&mut context as *mut VisibleWindowContext) as isize,
+        );
+    }
+    context.moved
+}
+
+#[cfg(target_os = "macos")]
+fn try_move_chrome_window_to_visible_position(pids: &[u32]) -> bool {
+    pids.iter().any(|pid| {
+        let script = format!(
+            "tell application \"System Events\"\nset chromeProcess to first application process whose unix id is {}\nset visible of chromeProcess to true\nset frontmost of chromeProcess to true\ntell chromeProcess\nif (count of windows) is 0 then error \"Chrome window not found\"\nset position of first window to {{{}, {}}}\nend tell\nend tell",
+            pid, CHROME_VISIBLE_WINDOW_X, CHROME_VISIBLE_WINDOW_Y
+        );
+        Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn try_move_chrome_window_to_visible_position(pids: &[u32]) -> bool {
+    if let Ok(output) = Command::new("wmctrl").arg("-lp").output()
+        && output.status.success()
+    {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            if fields.len() >= 3
+                && fields[2]
+                    .parse::<u32>()
+                    .ok()
+                    .is_some_and(|pid| pids.contains(&pid))
+            {
+                let window = fields[0];
+                let moved = Command::new("wmctrl")
+                    .args([
+                        "-i",
+                        "-r",
+                        window,
+                        "-e",
+                        &format!(
+                            "0,{},{},-1,-1",
+                            CHROME_VISIBLE_WINDOW_X, CHROME_VISIBLE_WINDOW_Y
+                        ),
+                    ])
+                    .status()
+                    .map(|status| status.success())
+                    .unwrap_or(false);
+                if moved {
+                    let _ = Command::new("wmctrl").args(["-i", "-a", window]).status();
+                    return true;
+                }
+            }
+        }
+    }
+
+    for pid in pids {
+        let output = Command::new("xdotool")
+            .args(["search", "--pid", &pid.to_string()])
+            .output();
+        let Some(window) = output
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| {
+                String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_string)
+            })
+        else {
+            continue;
+        };
+        let moved = Command::new("xdotool")
+            .args([
+                "windowmap",
+                &window,
+                "windowmove",
+                &window,
+                &CHROME_VISIBLE_WINDOW_X.to_string(),
+                &CHROME_VISIBLE_WINDOW_Y.to_string(),
+                "windowactivate",
+                &window,
+            ])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        if moved {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn try_move_chrome_window_to_visible_position(_pids: &[u32]) -> bool {
+    false
+}
+
+#[cfg(target_os = "windows")]
+fn make_chrome_window_visible(pids: &[u32]) -> Result<(), String> {
+    let expected_chrome_path = find_chrome_path()?;
+    let processes = open_validated_chrome_processes(pids, &expected_chrome_path);
+    if processes.is_empty() {
+        return Err(format!(
+            "Could not validate the managed Chrome process path as {} for process(es) {}. Run `ask-bridge close` and retry.",
+            expected_chrome_path,
+            pids.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    for _ in 0..30 {
+        if try_move_chrome_window_to_visible_position(&processes) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+
+    Err(format!(
+        "Could not restore the managed Chrome window for process(es) {} to the visible desktop. Run `ask-bridge close` and retry.",
+        pids.iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn make_chrome_window_visible(pids: &[u32]) -> Result<(), String> {
+    // The visible launch position is the cross-platform baseline. Window-manager
+    // helpers are optional on Unix, so reuse them on a best-effort basis without
+    // making an otherwise visible Chrome session fail when they are unavailable.
+    let _ = try_move_chrome_window_to_visible_position(pids);
+    Ok(())
+}
+
+fn apply_chrome_window_mode(headless: bool, snapshot: &ChromeDebugSnapshot) -> Result<(), String> {
+    apply_chrome_window_mode_with(headless, snapshot, make_chrome_window_visible)
+}
+
 fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
     let profile_path = chrome_profile_path()?;
 
@@ -1369,6 +1935,7 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
                     "Reusing existing ask-bridge Chrome on port 9223. Run `ask-bridge close` if you want to restart it in background mode."
                 );
             }
+            apply_chrome_window_mode(headless, &snapshot)?;
             return Ok(());
         }
 
@@ -1387,6 +1954,7 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
             if verbose {
                 println!("Reusing the existing ask-bridge Chrome on port 9223.");
             }
+            apply_chrome_window_mode(headless, &snapshot)?;
             return Ok(());
         }
 
@@ -1420,12 +1988,7 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
 
-    if headless {
-        cmd.arg("--ask-bridge-background")
-            .arg("--disable-blink-features=AutomationControlled")
-            .arg("--window-size=1440,1200")
-            .arg("--window-position=-2000,-2000");
-    }
+    cmd.args(chrome_window_launch_args(headless));
 
     let child = cmd
         .stdout(std::process::Stdio::null())
@@ -1486,6 +2049,13 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
                 if verbose {
                     println!("Chrome started and listening on port 9223.");
                 }
+                // A previously backgrounded profile can retain off-screen
+                // window bounds even when this launch requested a visible
+                // position. Re-apply the verified window mode after Chrome's
+                // real browser process and top-level window exist; otherwise
+                // VS Code-triggered login can leave only a flashing taskbar
+                // thumbnail that the user cannot restore.
+                apply_chrome_window_mode(headless, &snapshot)?;
                 return Ok(());
             }
             last_identity_error = Some(
@@ -1593,8 +2163,11 @@ fn chrome_record_matches_current(
     browser_id: Option<&str>,
     listener_pids: &[String],
 ) -> bool {
-    record.is_some_and(|record| chrome_record_matches_browser(record, browser_id))
-        && listener_pids.len() == 1
+    record.is_some_and(|record| {
+        chrome_record_matches_browser(record, browser_id)
+            && listener_pids.len() == 1
+            && listener_pids[0] == record.pid.to_string()
+    })
 }
 
 fn find_ask_chrome_owner_pids_with<C, P>(
@@ -3415,6 +3988,214 @@ mod tests {
     }
 
     #[test]
+    fn chrome_launch_args_put_headful_windows_on_the_visible_desktop() {
+        assert_eq!(
+            chrome_window_launch_args(false),
+            [CHROME_WINDOW_SIZE_ARG, "--window-position=80,80"]
+        );
+        assert!(
+            !chrome_window_launch_args(false)
+                .iter()
+                .any(|argument| argument.contains("background") || argument.contains("-2000"))
+        );
+    }
+
+    #[test]
+    fn chrome_launch_args_preserve_the_background_window_position() {
+        assert_eq!(
+            chrome_window_launch_args(true),
+            [
+                "--ask-bridge-background",
+                "--disable-blink-features=AutomationControlled",
+                CHROME_WINDOW_SIZE_ARG,
+                "--window-position=-2000,-2000",
+            ]
+        );
+    }
+
+    #[test]
+    fn headful_reuse_moves_the_identified_chrome_window_onscreen() {
+        let snapshot = ChromeDebugSnapshot {
+            listener_pids: vec!["20728".to_string()],
+            record: Some(ChromeProcessRecord {
+                pid: 20728,
+                browser_id: Some("browser-123".to_string()),
+            }),
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: vec!["30000".to_string()],
+        };
+        let mut calls = Vec::new();
+
+        apply_chrome_window_mode_with(false, &snapshot, |pids| {
+            calls.push(pids.to_vec());
+            Ok(())
+        })
+        .expect("headful reuse should restore the existing Chrome window");
+
+        assert_eq!(calls, vec![vec![20728, 30000]]);
+    }
+
+    #[test]
+    fn chrome_window_candidates_never_trust_a_raw_or_mismatched_listener() {
+        let fake_listener_snapshot = ChromeDebugSnapshot {
+            listener_pids: vec!["666".to_string()],
+            record: Some(ChromeProcessRecord {
+                pid: 20728,
+                browser_id: Some("browser-123".to_string()),
+            }),
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: vec!["30000".to_string()],
+        };
+        assert_eq!(
+            chrome_window_candidate_pids(&fake_listener_snapshot),
+            vec![30000]
+        );
+
+        let raw_listener_only = ChromeDebugSnapshot {
+            listener_pids: vec!["666".to_string()],
+            record: None,
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: Vec::new(),
+        };
+        assert!(chrome_window_candidate_pids(&raw_listener_only).is_empty());
+    }
+
+    #[test]
+    fn background_reuse_never_moves_the_managed_chrome_window() {
+        let snapshot = ChromeDebugSnapshot {
+            listener_pids: vec!["20728".to_string()],
+            record: Some(ChromeProcessRecord {
+                pid: 20728,
+                browser_id: Some("browser-123".to_string()),
+            }),
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: vec!["20728".to_string()],
+        };
+
+        apply_chrome_window_mode_with(true, &snapshot, |_| {
+            panic!("background reuse must not move Chrome onto the visible desktop")
+        })
+        .expect("background reuse should preserve its offscreen window mode");
+    }
+
+    #[test]
+    fn headful_reuse_propagates_window_restore_failures() {
+        let snapshot = ChromeDebugSnapshot {
+            listener_pids: vec!["20728".to_string()],
+            record: Some(ChromeProcessRecord {
+                pid: 20728,
+                browser_id: Some("browser-123".to_string()),
+            }),
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: vec![],
+        };
+
+        let error = apply_chrome_window_mode_with(false, &snapshot, |pids| {
+            assert_eq!(pids, [20728]);
+            Err("window move failed".to_string())
+        })
+        .expect_err("headful mode must not silently reuse an offscreen Chrome window");
+
+        assert_eq!(error, "window move failed");
+    }
+
+    #[test]
+    fn chrome_process_image_path_requires_a_full_case_insensitive_match() {
+        assert!(chrome_image_paths_match(
+            r"C:\Program Files\Google\Chrome\Application\CHROME.EXE",
+            r"c:\program files\google\chrome\application\chrome.exe"
+        ));
+        assert!(!chrome_image_paths_match(
+            r"C:\Temp\chrome.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        ));
+        assert!(!chrome_image_paths_match(
+            r"chrome.exe",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        ));
+    }
+
+    #[test]
+    fn chrome_window_predicate_requires_pid_class_owner_and_title_checks() {
+        assert!(chrome_window_matches_predicate(
+            true,
+            "Chrome_WidgetWin_1",
+            false,
+            12
+        ));
+        assert!(!chrome_window_matches_predicate(
+            false,
+            "Chrome_WidgetWin_1",
+            false,
+            12
+        ));
+        assert!(!chrome_window_matches_predicate(
+            true,
+            "Chrome_RenderWidgetHostHWND",
+            false,
+            12
+        ));
+        assert!(!chrome_window_matches_predicate(
+            true,
+            "Chrome_WidgetWin_1",
+            true,
+            12
+        ));
+        assert!(!chrome_window_matches_predicate(
+            true,
+            "Chrome_WidgetWin_1",
+            false,
+            0
+        ));
+    }
+
+    #[test]
+    fn screen_rect_intersection_requires_positive_visible_area() {
+        let monitor = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        assert!(screen_rects_intersect(
+            ScreenRect {
+                left: 80,
+                top: 80,
+                right: 1000,
+                bottom: 900,
+            },
+            monitor
+        ));
+        assert!(screen_rects_intersect(
+            ScreenRect {
+                left: -100,
+                top: 50,
+                right: 100,
+                bottom: 200,
+            },
+            monitor
+        ));
+        assert!(!screen_rects_intersect(
+            ScreenRect {
+                left: -500,
+                top: 50,
+                right: 0,
+                bottom: 200,
+            },
+            monitor
+        ));
+        assert!(!screen_rects_intersect(
+            ScreenRect {
+                left: 80,
+                top: 80,
+                right: 80,
+                bottom: 200,
+            },
+            monitor
+        ));
+    }
+
+    #[test]
     fn marker_identifies_ask_bridge_chrome_without_profile_argument() {
         let command = r#"chrome.exe --type=browser --ask-bridge-instance"#;
 
@@ -3529,6 +4310,21 @@ mod tests {
             Some(&record),
             Some("browser-123"),
             &multiple
+        ));
+        assert!(!chrome_record_matches_current(
+            Some(&record),
+            Some("browser-123"),
+            &["30000".to_string()]
+        ));
+        assert!(!chrome_record_matches_current(
+            Some(&record),
+            Some("browser-123"),
+            &["not-a-pid".to_string()]
+        ));
+        assert!(!chrome_record_matches_current(
+            Some(&record),
+            Some("browser-123"),
+            &["020728".to_string()]
         ));
     }
 
@@ -7398,7 +8194,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("Waiting for {} response...", provider.display_name());
     }
 
-    let last_markdown;
     let mut finished = false;
     let mut wait_cycles = 0;
     let mut stable_done_checks = 0;
@@ -7539,7 +8334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             provider.display_name()
         );
     }
-    last_markdown = copy_latest_markdown(&config_path, provider).map_err(|e| {
+    let last_markdown = copy_latest_markdown(&config_path, provider).map_err(|e| {
         format!(
             "Failed to copy the completed response from {}: {}",
             provider.display_name(),

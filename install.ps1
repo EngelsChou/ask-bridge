@@ -1,10 +1,94 @@
 # install.ps1 for Windows PowerShell
 param(
     [switch]$Local,
-    [string]$LocalPath = ""
+    [string]$LocalPath = "",
+    [string]$MinimumVersion = $env:ASK_BRIDGE_MIN_VERSION,
+    [switch]$AllowDowngrade
 )
 
 $ErrorActionPreference = "Stop"
+$Version = "0.3.1"
+$AllowDowngradeRequested = $AllowDowngrade -or $env:ASK_BRIDGE_ALLOW_DOWNGRADE -eq "1"
+
+function ConvertTo-AskBridgeReleaseVersion {
+    param(
+        [Parameter(Mandatory)] [string] $Value,
+        [Parameter(Mandatory)] [string] $Name
+    )
+
+    $normalized = $Value.Trim()
+    if ($normalized.StartsWith("v", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $normalized = $normalized.Substring(1)
+    }
+    if ($normalized -notmatch '^(\d+)\.(\d+)\.(\d+)$') {
+        throw "$Name must be a stable semantic version in MAJOR.MINOR.PATCH form; got '$Value'."
+    }
+
+    return [version]$normalized
+}
+
+function Assert-AskBridgeVersionTransition {
+    param([Parameter(Mandatory)] [string] $ExistingBinary)
+
+    if (-not (Test-Path -LiteralPath $ExistingBinary -PathType Leaf) -or $AllowDowngradeRequested) {
+        return
+    }
+
+    $InstalledVersionText = (Get-Item -LiteralPath $ExistingBinary).VersionInfo.FileVersion
+    if ([string]::IsNullOrWhiteSpace($InstalledVersionText) -or $InstalledVersionText -notmatch '^\s*(\d+)\.(\d+)\.(\d+)(?:\.\d+)?\s*$') {
+        throw "Could not safely read the installed ask-bridge file version resource. Set ASK_BRIDGE_ALLOW_DOWNGRADE=1 only if you explicitly want to replace it."
+    }
+    $InstalledVersion = "$($Matches[1]).$($Matches[2]).$($Matches[3])"
+    $InstalledReleaseVersion = ConvertTo-AskBridgeReleaseVersion -Value $InstalledVersion -Name "Installed version"
+    $TargetReleaseVersion = ConvertTo-AskBridgeReleaseVersion -Value $Version -Name "Target version"
+    if ($TargetReleaseVersion.CompareTo($InstalledReleaseVersion) -lt 0) {
+        throw "Refusing to downgrade ask-bridge from $($InstalledReleaseVersion.ToString()) to $Version. Set ASK_BRIDGE_ALLOW_DOWNGRADE=1 only if you explicitly want this downgrade."
+    }
+}
+
+function Enter-AskBridgeInstallLock {
+    param([Parameter(Mandatory)] [string] $InstallDir)
+
+    $LockPath = "$InstallDir.ask-bridge.install.lock"
+    $Deadline = [DateTime]::UtcNow.AddSeconds(60)
+    while ([DateTime]::UtcNow -lt $Deadline) {
+        try {
+            $Stream = [System.IO.File]::Open(
+                $LockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+            return [pscustomobject]@{ Stream = $Stream; Path = $LockPath }
+        } catch [System.IO.IOException] {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    throw "Timed out waiting for another Ask Bridge installer to finish ($LockPath)."
+}
+
+function Exit-AskBridgeInstallLock {
+    param($Lock)
+
+    if (-not $Lock) {
+        return
+    }
+    $Lock.Stream.Dispose()
+    Remove-Item -LiteralPath $Lock.Path -Force -ErrorAction SilentlyContinue
+}
+
+if (-not [string]::IsNullOrWhiteSpace($MinimumVersion)) {
+    $targetReleaseVersion = ConvertTo-AskBridgeReleaseVersion -Value $Version -Name "Target version"
+    $minimumReleaseVersion = ConvertTo-AskBridgeReleaseVersion -Value $MinimumVersion -Name "Minimum version"
+    if ($targetReleaseVersion.CompareTo($minimumReleaseVersion) -lt 0) {
+        Write-Host "Refusing to install ask-bridge $Version because the updater requires $MinimumVersion or newer." -ForegroundColor Red
+        exit 1
+    }
+}
+
+if ($env:ASK_BRIDGE_VERSION_CHECK_ONLY -eq "1") {
+    exit 0
+}
 
 Write-Host "Starting Ask Bridge installation for Windows..." -ForegroundColor Cyan
 
@@ -103,9 +187,17 @@ function Copy-ItemWithRetry {
         [Parameter(Mandatory)] [string] $Destination
     )
 
+    $DestinationDirectory = Split-Path -Parent $Destination
+    $DestinationName = Split-Path -Leaf $Destination
     for ($attempt = 1; $attempt -le 10; $attempt++) {
+        $StagedPath = Join-Path $DestinationDirectory (".$DestinationName.new-" + [guid]::NewGuid().ToString("N"))
         try {
-            Copy-Item -Path $Source -Destination $Destination -Force
+            Copy-Item -LiteralPath $Source -Destination $StagedPath
+            if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+                [System.IO.File]::Replace($StagedPath, $Destination, $null)
+            } else {
+                [System.IO.File]::Move($StagedPath, $Destination)
+            }
             return
         } catch {
             if ($attempt -eq 1) {
@@ -118,6 +210,8 @@ function Copy-ItemWithRetry {
 
             Write-Host "Retrying copy for $Destination in 500ms (attempt $attempt/10)..." -ForegroundColor Yellow
             Start-Sleep -Milliseconds 500
+        } finally {
+            Remove-Item -LiteralPath $StagedPath -Force -ErrorAction SilentlyContinue
         }
     }
 }
@@ -238,12 +332,19 @@ if ($Local) {
     $DestPath = Join-Path $InstallDir "ask-bridge.exe"
     $AliasPath = Join-Path $InstallDir "ask.exe"
     $UpdatePath = Join-Path $InstallDir "ask-bridge-update.exe"
-    Write-Host "Installing local ask-bridge.exe to $InstallDir..." -ForegroundColor Cyan
-    $ResolvedLocalPath = (Resolve-Path $LocalPath).Path
-    $ResolvedLocalUpdatePath = (Resolve-Path $LocalUpdatePath).Path
-    Copy-ItemWithRetry -Source $ResolvedLocalPath -Destination $DestPath
-    Copy-ItemWithRetry -Source $ResolvedLocalPath -Destination $AliasPath
-    Copy-ItemWithRetry -Source $ResolvedLocalUpdatePath -Destination $UpdatePath
+    $InstallLock = Enter-AskBridgeInstallLock -InstallDir $InstallDir
+    try {
+        Assert-AskBridgeVersionTransition -ExistingBinary $DestPath
+        Write-Host "Installing local ask-bridge.exe to $InstallDir..." -ForegroundColor Cyan
+        $ResolvedLocalPath = (Resolve-Path $LocalPath).Path
+        $ResolvedLocalUpdatePath = (Resolve-Path $LocalUpdatePath).Path
+        Copy-ItemWithRetry -Source $ResolvedLocalUpdatePath -Destination $UpdatePath
+        Copy-ItemWithRetry -Source $ResolvedLocalPath -Destination $AliasPath
+        # ask-bridge.exe is the commit point and must be replaced last.
+        Copy-ItemWithRetry -Source $ResolvedLocalPath -Destination $DestPath
+    } finally {
+        Exit-AskBridgeInstallLock -Lock $InstallLock
+    }
 
     $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
     $CleanPathList = $UserPath -split ';'
@@ -266,11 +367,11 @@ if ($Local) {
 }
 
 # 3. Target configuration
-$Version = "0.3.0"
 $RepoOwner = "EngelsChou"
 $RepoName = "ask-bridge"
 $ArtifactName = "ask-bridge-x86_64-pc-windows-msvc.zip"
 $ReleaseUrl = "https://github.com/$RepoOwner/$RepoName/releases/download/v$Version/$ArtifactName"
+$ChecksumUrl = "$ReleaseUrl.sha256"
 
 # 4. Create installation directory
 $InstallDir = Join-Path $HOME ".local\bin"
@@ -278,19 +379,40 @@ if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 }
 
-$TempDir = Join-Path $env:TEMP "ask-bridge-install"
-if (Test-Path $TempDir) {
-    Remove-Item -Recurse -Force $TempDir
-}
-New-Item -ItemType Directory -Path $TempDir | Out-Null
-
+$ExistingBinary = Join-Path $InstallDir "ask-bridge.exe"
+$InstallLock = Enter-AskBridgeInstallLock -InstallDir $InstallDir
 try {
-    # 5. Download zip
-    Write-Host "Downloading $ArtifactName..." -ForegroundColor Cyan
-    $ZipPath = Join-Path $TempDir $ArtifactName
-    Invoke-WebRequest -Uri $ReleaseUrl -OutFile $ZipPath
+    Assert-AskBridgeVersionTransition -ExistingBinary $ExistingBinary
+    $TempDir = Join-Path $env:TEMP ("ask-bridge-install-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $TempDir | Out-Null
 
-    # 6. Extract zip
+    try {
+    # 5. Download archive and its release checksum
+    Write-Host "Downloading $ArtifactName and SHA-256 checksum..." -ForegroundColor Cyan
+    $ZipPath = Join-Path $TempDir $ArtifactName
+    $ChecksumPath = "$ZipPath.sha256"
+    if ([enum]::GetNames([Net.SecurityProtocolType]) -contains "Tls12") {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    }
+    Invoke-WebRequest -UseBasicParsing -Uri $ReleaseUrl -OutFile $ZipPath
+    Invoke-WebRequest -UseBasicParsing -Uri $ChecksumUrl -OutFile $ChecksumPath
+
+    $ChecksumLine = (Get-Content -LiteralPath $ChecksumPath -Raw).Trim()
+    if ($ChecksumLine -notmatch '(?i)^([0-9a-f]{64})\s+\*?(.+?)\s*$') {
+        throw "Invalid checksum file format downloaded from $ChecksumUrl."
+    }
+    $ExpectedHash = $Matches[1].ToLowerInvariant()
+    $ChecksumArtifactName = $Matches[2].Trim()
+    if ($ChecksumArtifactName -ne $ArtifactName) {
+        throw "Checksum file names '$ChecksumArtifactName', expected '$ArtifactName'."
+    }
+    $ActualHash = (Get-FileHash -LiteralPath $ZipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($ActualHash -ne $ExpectedHash) {
+        throw "SHA-256 checksum mismatch for $ArtifactName. Expected $ExpectedHash, got $ActualHash."
+    }
+    Write-Host "Verified SHA-256 checksum for $ArtifactName." -ForegroundColor Green
+
+    # 6. Extract the verified archive
     Write-Host "Extracting archive..." -ForegroundColor Cyan
     Expand-Archive -Path $ZipPath -DestinationPath $TempDir -Force
 
@@ -303,25 +425,29 @@ try {
     $UpdateExePath = Get-ChildItem -Path $TempDir -Recurse -Filter "ask-bridge-update.exe" | Select-Object -First 1
 
     # Copy to destination as ask-bridge.exe and keep ask.exe as an alias.
+    Assert-AskBridgeVersionTransition -ExistingBinary $ExistingBinary
     $DestPath = Join-Path $InstallDir "ask-bridge.exe"
     $AliasPath = Join-Path $InstallDir "ask.exe"
     $UpdateDestPath = Join-Path $InstallDir "ask-bridge-update.exe"
     Write-Host "Installing ask-bridge.exe to $InstallDir..." -ForegroundColor Cyan
-    Copy-ItemWithRetry -Source $ExePath.FullName -Destination $DestPath
-    Copy-ItemWithRetry -Source $ExePath.FullName -Destination $AliasPath
-
     if ($UpdateExePath) {
         Write-Host "Installing ask-bridge-update.exe to $InstallDir..." -ForegroundColor Cyan
         Copy-ItemWithRetry -Source $UpdateExePath.FullName -Destination $UpdateDestPath
     } else {
         Write-Host "Warning: ask-bridge-update.exe not found in archive; update helper unavailable." -ForegroundColor Yellow
     }
-}
-finally {
-    # Clean up temp
-    if (Test-Path $TempDir) {
-        Remove-Item -Recurse -Force $TempDir
+    Copy-ItemWithRetry -Source $ExePath.FullName -Destination $AliasPath
+    # ask-bridge.exe is the commit point and must be replaced last.
+    Copy-ItemWithRetry -Source $ExePath.FullName -Destination $DestPath
     }
+    finally {
+        # Clean up this invocation's private temporary directory.
+        if (Test-Path $TempDir) {
+            Remove-Item -Recurse -Force $TempDir
+        }
+    }
+} finally {
+    Exit-AskBridgeInstallLock -Lock $InstallLock
 }
 
 # 7. Check/Add to PATH

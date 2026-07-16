@@ -5,6 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
   id-token: write
@@ -13,24 +17,42 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 22
       - name: Install supported npm version
         run: npm install -g npm@11.18.0
-      - name: Align npm version with release tag
-        if: github.event_name == 'release'
+      - name: Verify tag and package versions
+        id: preflight
         run: |
-          VERSION="${{ github.event.release.tag_name }}"
-          VERSION="${VERSION#v}"
-          CURRENT_VERSION="$(node -p "require('./package.json').version")"
-          if [ "$CURRENT_VERSION" != "$VERSION" ]; then
-            npm version "$VERSION" --no-git-tag-version --allow-same-version
+          TAG="${{ github.event.release.tag_name || github.ref_name }}"
+          if [[ ! "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "npm publication requires a stable vX.Y.Z tag; got '$TAG'." >&2
+            exit 1
+          fi
+          VERSION="${BASH_REMATCH[1]}"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          CARGO_VERSION="$(sed -nE 's/^version = "([^"]+)"/\1/p' Cargo.toml | head -n 1)"
+          if [[ "$PACKAGE_VERSION" != "$VERSION" || "$CARGO_VERSION" != "$VERSION" ]]; then
+            echo "Version mismatch: tag=$VERSION package=$PACKAGE_VERSION cargo=$CARGO_VERSION" >&2
+            exit 1
+          fi
+          if [[ "$(git tag --points-at HEAD | grep -Fx "$TAG" || true)" != "$TAG" ]]; then
+            echo "Checked-out commit is not tagged $TAG." >&2
+            exit 1
+          fi
+          if [[ "$(npm view "ask-bridge@$VERSION" version 2>/dev/null || true)" == "$VERSION" ]]; then
+            echo "ask-bridge@$VERSION is already published; no-op."
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
           else
-            echo "package.json already at v$VERSION; skip npm version update"
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Publish
+        if: steps.preflight.outputs.already_published != 'true'
         run: npm publish --provenance --access public
         env:
           ASK_CHATGPT_RELEASE_ASSET_RETRIES: 12

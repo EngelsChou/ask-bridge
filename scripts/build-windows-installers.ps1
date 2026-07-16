@@ -64,6 +64,35 @@ function Resolve-Executable {
     return $null
 }
 
+function Get-CertificateSha256 {
+    param([Parameter(Mandatory)] [Security.Cryptography.X509Certificates.X509Certificate2] $Certificate)
+
+    $sha256 = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha256.ComputeHash($Certificate.RawData))).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $sha256.Dispose()
+    }
+}
+
+function Assert-ExpectedPublisherCertificate {
+    param([Parameter(Mandatory)] [Security.Cryptography.X509Certificates.X509Certificate2] $Certificate)
+
+    $publisher = $Certificate.GetNameInfo(
+        [Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+        $false
+    )
+    if ($publisher -cne "Engels Chou") {
+        throw "The code-signing certificate publisher must be exactly 'Engels Chou'; got '$publisher'."
+    }
+    $actualSignerSha256 = Get-CertificateSha256 -Certificate $Certificate
+    if ($env:ASK_BRIDGE_WINDOWS_SIGNER_SHA256 -and $actualSignerSha256 -cne $env:ASK_BRIDGE_WINDOWS_SIGNER_SHA256.ToLowerInvariant()) {
+        throw "The code-signing certificate does not match ASK_BRIDGE_WINDOWS_SIGNER_SHA256."
+    }
+    $env:ASK_BRIDGE_WINDOWS_SIGNER_SHA256 = $actualSignerSha256
+    return $actualSignerSha256
+}
+
 function Resolve-SigningConfiguration {
     if (-not $CertificateThumbprint) {
         $script:CertificateThumbprint = $env:ASK_BRIDGE_SIGNING_CERTIFICATE_THUMBPRINT
@@ -103,7 +132,20 @@ function Resolve-SigningConfiguration {
         if (-not (Test-Path -LiteralPath $CertificatePath -PathType Leaf)) {
             throw "Code-signing certificate file not found: $CertificatePath"
         }
+        $certificateBytes = [IO.File]::ReadAllBytes($CertificatePath)
+        $certificate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $certificateBytes,
+            $CertificatePassword,
+            [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet
+        )
+    } else {
+        $normalizedThumbprint = $CertificateThumbprint -replace '\s', ''
+        $certificate = Get-ChildItem -LiteralPath "Cert:\CurrentUser\My\$normalizedThumbprint" -ErrorAction Stop
     }
+    if (-not $certificate.HasPrivateKey) {
+        throw "The configured code-signing certificate has no private key."
+    }
+    $script:ExpectedSignerSha256 = Assert-ExpectedPublisherCertificate -Certificate $certificate
 
     return $resolvedSignTool
 }
@@ -134,6 +176,14 @@ function Invoke-CodeSigning {
     if ($LASTEXITCODE -ne 0) {
         throw "Authenticode verification failed for $Path with exit code $LASTEXITCODE."
     }
+    $signature = Get-AuthenticodeSignature -LiteralPath $Path
+    if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+        throw "PowerShell Authenticode verification failed for ${Path}: $($signature.Status) $($signature.StatusMessage)"
+    }
+    $actualSignerSha256 = Assert-ExpectedPublisherCertificate -Certificate $signature.SignerCertificate
+    if ($actualSignerSha256 -cne $script:ExpectedSignerSha256) {
+        throw "The signed file $Path uses an unexpected signer certificate."
+    }
 }
 
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
@@ -155,6 +205,7 @@ $OriginalUpdatePath = $env:ASK_BRIDGE_UPDATE_BINARY_PATH
 $OriginalUninstallPath = $env:ASK_BRIDGE_UNINSTALL_BINARY_PATH
 $OriginalAppVersion = $env:ASK_BRIDGE_APP_VERSION
 $OriginalPayloadFingerprint = $env:ASK_BRIDGE_PAYLOAD_FINGERPRINT
+$OriginalSignerSha256 = $env:ASK_BRIDGE_WINDOWS_SIGNER_SHA256
 
 try {
     $env:ASK_BRIDGE_APP_VERSION = $BuildAppVersion
@@ -244,4 +295,5 @@ try {
     $env:ASK_BRIDGE_UNINSTALL_BINARY_PATH = $OriginalUninstallPath
     $env:ASK_BRIDGE_APP_VERSION = $OriginalAppVersion
     $env:ASK_BRIDGE_PAYLOAD_FINGERPRINT = $OriginalPayloadFingerprint
+    $env:ASK_BRIDGE_WINDOWS_SIGNER_SHA256 = $OriginalSignerSha256
 }

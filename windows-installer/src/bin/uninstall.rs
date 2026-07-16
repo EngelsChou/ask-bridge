@@ -5,7 +5,8 @@ use std::env;
 use std::fs;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -102,6 +103,7 @@ fn absolute_path(path: &Path) -> Result<PathBuf, String> {
 }
 
 fn uninstall(options: &Options) -> Result<(), String> {
+    let _install_lock = common::acquire_install_lock(&options.install_dir)?;
     println!("Ask Bridge 解除安裝程式");
     println!("安裝目錄：{}", options.install_dir.display());
 
@@ -119,7 +121,18 @@ fn uninstall(options: &Options) -> Result<(), String> {
         .ok()
         .is_some_and(|current| paths_equal(&current, &installed_uninstaller));
     if running_installed_copy {
-        schedule_self_delete(&installed_uninstaller)?;
+        // Rename the running image while the install-directory lock is held.
+        // A concurrent reinstall may then create a fresh uninstall.exe; the
+        // helper only ever deletes this unique old tombstone, never the new
+        // installer's file at the canonical path.
+        let tombstone = running_uninstaller_tombstone(&installed_uninstaller);
+        fs::rename(&installed_uninstaller, &tombstone).map_err(|error| {
+            format!(
+                "無法將執行中的解除安裝程式移至安全暫存名稱 {}：{error}",
+                tombstone.display()
+            )
+        })?;
+        schedule_self_delete(&tombstone)?;
         println!("已排程移除：{}", installed_uninstaller.display());
     } else {
         match common::remove_file_if_present(&installed_uninstaller) {
@@ -180,9 +193,23 @@ fn schedule_self_delete(path: &Path) -> Result<(), String> {
             &command,
         ])
         .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map(|_| ())
         .map_err(|error| format!("無法排程刪除解除安裝程式：{error}"))
+}
+
+fn running_uninstaller_tombstone(path: &Path) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    path.with_file_name(format!(
+        "uninstall.exe.delete-{}-{nonce}",
+        std::process::id()
+    ))
 }
 
 fn self_delete_command(path: &Path, parent_pid: u32) -> String {
@@ -197,10 +224,8 @@ fn self_delete_command(path: &Path, parent_pid: u32) -> String {
              if (-not (Test-Path -LiteralPath '{file}')) {{ break }}; \
              Start-Sleep -Milliseconds 200 \
          }}; \
-         for ($attempt = 0; $attempt -lt 100; $attempt++) {{ \
-             Remove-Item -LiteralPath '{parent}' -Force -ErrorAction SilentlyContinue; \
-             if (-not (Test-Path -LiteralPath '{parent}')) {{ break }}; \
-             Start-Sleep -Milliseconds 200 \
+         if (-not (Get-ChildItem -LiteralPath '{parent}' -Force -ErrorAction SilentlyContinue | Select-Object -First 1)) {{ \
+             Remove-Item -LiteralPath '{parent}' -Force -ErrorAction SilentlyContinue \
          }}"
     )
 }
@@ -212,7 +237,7 @@ mod tests {
     #[test]
     fn self_delete_waits_for_parent_and_retries_removal() {
         let command = self_delete_command(
-            Path::new(r"C:\Program Files\Engels's Ask Bridge\uninstall.exe"),
+            Path::new(r"C:\Program Files\Engels's Ask Bridge\uninstall.exe.delete-4242-123456"),
             4242,
         );
 
@@ -220,6 +245,17 @@ mod tests {
         assert!(command.contains("$parentPid = 4242"));
         assert!(command.contains("$attempt -lt 100"));
         assert!(command.contains("Engels''s Ask Bridge"));
+        assert!(command.contains("uninstall.exe.delete-4242-123456"));
         assert!(!command.contains("Start-Sleep -Milliseconds 750"));
+    }
+
+    #[test]
+    fn running_uninstaller_uses_a_unique_tombstone_name() {
+        let original = Path::new(r"C:\Tools\Ask Bridge\uninstall.exe");
+        let tombstone = running_uninstaller_tombstone(original);
+        assert_eq!(tombstone.parent(), original.parent());
+        let name = tombstone.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with(&format!("uninstall.exe.delete-{}-", std::process::id())));
+        assert_ne!(tombstone, original);
     }
 }

@@ -73,16 +73,33 @@ npx -v
 #### macOS / Linux
 請開啟終端機執行：
 ```bash
-curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main-add-m365-copilot/install.sh | bash
 ```
 
 #### Windows
-請開啟 PowerShell (建議以系統管理員身分) 執行：
+請開啟一般使用者權限的 PowerShell，前往最新版 Release：
 ```powershell
-irm https://raw.githubusercontent.com/EngelsChou/ask-bridge/main/install.ps1 | iex
+Start-Process "https://github.com/EngelsChou/ask-bridge/releases/latest"
 ```
 
+請從最新版 Release 下載同一版本的 `install.exe` 與 `uninstall.exe`。若檔案具有數位簽章，可在「內容 → 數位簽章」確認簽署者；Release 未設定 Authenticode 憑證時仍會發布未簽章的 Windows 安裝檔，Windows 可能顯示「不明的發行者」。安裝是使用者層級，不需要系統管理員權限。
+
+> [!IMPORTANT]
+> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.1 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
+
+既有 v0.3.0 或更舊的 macOS/Linux 安裝沒有雜湊綁定的版本紀錄，第一次遷移必須明確允許取代：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EngelsChou/ask-bridge/main-add-m365-copilot/install.sh | ASK_BRIDGE_ALLOW_DOWNGRADE=1 bash
+```
+
+完成一次遷移後，安裝器會持有安裝目錄排他鎖、以原子方式替換程式，並用 SHA-256 將版本紀錄綁定到實際 binary；一般升級不需要再設定 override。
+
+macOS/Linux 網路安裝腳本會同時下載同一個 Release 的 `.sha256` 檔並在解壓縮前驗證 archive；驗證失敗就停止安裝。Windows Release 一律提供 `.sha256` sidecar 與檔案版本資源；若建置時有設定受信任憑證，還會加上 Authenticode 簽章。
+
 若公司網路不允許 `npm install` 或安裝時連線 GitHub，可改用 Release 附件中的 `install.exe` 進行完全離線的使用者層級安裝，不需要系統管理員權限。此檔案已內嵌 `ask-bridge.exe`、`ask.exe`、更新輔助程式及 `uninstall.exe`，安裝過程不會執行 npm，也不會下載任何內容。Node.js、npx、`chrome-devtools-mcp@1.5.0` 與 Google Chrome 屬於執行環境前置需求；若公司電腦已經安裝或快取，安裝程式會直接沿用。
+
+`install.exe` 會先檢查安裝目錄中的既有 `ask-bridge.exe` 版本；若既有版本較新，預設拒絕降版。只有確定需要回退時，才能明確執行 `install.exe --allow-downgrade`。
 
 從原始碼產生離線安裝程式時，請在 Windows PowerShell 執行：
 
@@ -102,7 +119,7 @@ Windows SmartScreen 顯示的發行者來自 Authenticode 數位簽章。若要�
 .\scripts\build-windows-installers.ps1 -CertificatePath "C:\secure\engels-chou-code-signing.pfx" -CertificatePassword "<password>" -RequireSignature
 ```
 
-GitHub hosted runner 不會自帶 Engels Chou 的程式碼簽章憑證，因此 CI 預設產生未簽署檔案。Release workflow 支援 repository secrets `WINDOWS_SIGNING_CERTIFICATE_BASE64`（PFX 的 base64）與 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`；前者存在時會把 PFX 寫入 runner 暫存目錄並以 `-RequireSignature` 建置，簽章失敗即停止發行，最後再刪除暫存 PFX。憑證必須由 Windows 信任且主體為 Engels Chou；未設定 secrets 時仍能離線封裝，但產物不會有受信任的發行者身分。
+GitHub hosted runner 不會自帶 Engels Chou 的程式碼簽章憑證。若設定 repository secrets `WINDOWS_SIGNING_CERTIFICATE_BASE64`（PFX 的 base64）與 `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`，Release workflow 會驗證私鑰、發行者名稱與 SHA-256 憑證指紋，簽署並再次驗證 ZIP 內程式與兩個離線安裝檔，最後刪除暫存 PFX；未設定憑證時則發布未簽章檔案，但仍執行雜湊與 installer smoke test。
 
 > [!NOTE]
 > 請確保安裝路徑（macOS/Linux 為 `~/.local/bin`；Windows 為 `$HOME\.local\bin`）已加入您的系統 `PATH` 環境變數中。
@@ -113,6 +130,8 @@ GitHub hosted runner 不會自帶 Engels Chou 的程式碼簽章憑證，因此 
 若您想從原始碼編譯並安裝，請在複製本專案後，在專案目錄下執行：
 
 ```bash
+git clone --branch main-add-m365-copilot --single-branch https://github.com/EngelsChou/ask-bridge.git
+cd ask-bridge
 make install
 ```
 
@@ -135,13 +154,13 @@ cargo build --release
 請使用 `npx skills` 安裝，不需要手動複製 `skills/` 目錄：
 
 ```bash
-npx skills add EngelsChou/ask-bridge --skill ask-bridge
+npx skills add https://github.com/EngelsChou/ask-bridge/tree/main-add-m365-copilot/skills/ask-bridge
 ```
 
 若要安裝到 Codex 的全域 Skills 目錄，可指定 agent 與 global scope：
 
 ```bash
-npx skills add EngelsChou/ask-bridge --skill ask-bridge --agent codex --global
+npx skills add https://github.com/EngelsChou/ask-bridge/tree/main-add-m365-copilot/skills/ask-bridge --agent codex --global
 ```
 
 ## 使用方式
@@ -389,13 +408,15 @@ ask-bridge close
 
 ### 12. 更新 ask-bridge
 
-若要直接自動更新目前安裝的 `ask-bridge`，可直接執行：
+**只有 v0.3.1 或更新版本**可以直接執行：
 
 ```bash
 ask-bridge update
 ```
 
-此命令會依作業系統重新執行 README 建議的官方安裝命令（macOS / Linux 或 Windows）。
+具有內嵌受信任簽章指紋的 Windows build 會下載最新版 Release 的 `install.exe`，驗證有效的 Engels Chou Authenticode 簽章、固定憑證指紋及版本下限後才執行；未簽章 Windows build 會安全拒絕自動更新，請改從 Release 手動下載。macOS/Linux 會執行固定在 `main-add-m365-copilot` 的安裝腳本並傳入目前版本下限。
+
+v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.1 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
 
 ## 運作原理
 

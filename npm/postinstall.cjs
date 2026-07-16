@@ -14,7 +14,7 @@ const {
   writeFileSync,
 } = require('node:fs');
 const { get } = require('node:https');
-const { join } = require('node:path');
+const { basename, join } = require('node:path');
 const { URL } = require('node:url');
 
 const PACKAGE_ROOT = join(__dirname, '..');
@@ -24,6 +24,8 @@ const GITHUB_REPO = "ask-bridge";
 const BIN_DIR = join(__dirname, `${BINARY_NAME}-bin`);
 const BIN_NAME = process.platform === 'win32' ? `${BINARY_NAME}.exe` : BINARY_NAME;
 const DEST = join(BIN_DIR, BIN_NAME);
+const UPDATER_NAME = process.platform === 'win32' ? `${BINARY_NAME}-update.exe` : `${BINARY_NAME}-update`;
+const UPDATER_DEST = join(BIN_DIR, UPDATER_NAME);
 
 const TARGETS = {
   'darwin-arm64': 'aarch64-apple-darwin',
@@ -62,10 +64,16 @@ function sha256(path) {
 }
 
 function verifyChecksum(filePath, checksumText) {
-  const expected = checksumText.trim().split(/\s+/)[0].toLowerCase();
-  if (!/^[a-f0-9]{64}$/.test(expected)) {
+  const normalized = checksumText.replaceAll('\r\n', '\n');
+  const lines = normalized.endsWith('\n') ? normalized.slice(0, -1).split('\n') : normalized.split('\n');
+  if (lines.length !== 1) {
     throw new Error('Invalid checksum file format');
   }
+  const match = lines[0].match(/^([a-fA-F0-9]{64})[ \t]+\*?([^ \t\r\n]+)[ \t]*$/);
+  if (!match || match[2] !== basename(filePath)) {
+    throw new Error('Invalid checksum file format or artifact name');
+  }
+  const expected = match[1].toLowerCase();
   const actual = sha256(filePath);
   if (actual !== expected) {
     throw new Error(`Checksum mismatch for ${filePath}: expected ${expected}, got ${actual}`);
@@ -126,10 +134,42 @@ function findExtractedBinary(dir, binName = BIN_NAME) {
   throw new Error(`Archive did not contain ${binName}`);
 }
 
+function verifyWindowsAuthenticode(path, expectedVersion = packageVersion()) {
+  if (process.platform !== 'win32') return;
+  const script = [
+    "$ErrorActionPreference='Stop'",
+    '$path=$env:ASK_BRIDGE_VERIFY_FILE',
+    '$signature=Get-AuthenticodeSignature -LiteralPath $path',
+    "if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or -not $signature.SignerCertificate) { throw ('Invalid Authenticode signature for ' + $path + ': ' + $signature.Status + ' ' + $signature.StatusMessage) }",
+    '$publisher=$signature.SignerCertificate.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)',
+    "if ($publisher -cne 'Engels Chou') { throw ('Unexpected publisher for ' + $path + ': ' + $publisher) }",
+    '$fileVersion=(Get-Item -LiteralPath $path).VersionInfo.FileVersion',
+    "if ($fileVersion -notmatch '^\\s*(\\d+)\\.(\\d+)\\.(\\d+)(?:\\.\\d+)?\\s*$') { throw ('Invalid file version for ' + $path + ': ' + $fileVersion) }",
+    '$normalizedVersion="$($Matches[1]).$($Matches[2]).$($Matches[3])"',
+    "if ($normalizedVersion -cne $env:ASK_BRIDGE_VERIFY_VERSION) { throw ('Unexpected file version for ' + $path + ': ' + $normalizedVersion) }",
+  ].join('; ');
+  const result = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ASK_BRIDGE_VERIFY_FILE: path,
+      ASK_BRIDGE_VERIFY_VERSION: expectedVersion,
+    },
+  });
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Windows signature verification failed for ${path}: ${result.stderr || result.stdout}`);
+  }
+}
+
 function installFromLocalBuild() {
   const localRelease = join(PACKAGE_ROOT, 'target', 'release', BIN_NAME);
-  if (!existsSync(localRelease)) return false;
+  const localUpdater = join(PACKAGE_ROOT, 'target', 'release', UPDATER_NAME);
+  if (!existsSync(localRelease) || !existsSync(localUpdater)) return false;
   mkdirSync(BIN_DIR, { recursive: true });
+  copyFileSync(localUpdater, UPDATER_DEST);
+  chmodSync(UPDATER_DEST, 0o755);
+  // The main executable is the commit point and is installed last.
   copyFileSync(localRelease, DEST);
   chmodSync(DEST, 0o755);
   return true;
@@ -151,7 +191,13 @@ async function installFromRelease() {
   extract(archivePath, tmpDir);
 
   const extracted = findExtractedBinary(tmpDir);
+  const extractedUpdater = findExtractedBinary(tmpDir, UPDATER_NAME);
+  verifyWindowsAuthenticode(extractedUpdater);
+  verifyWindowsAuthenticode(extracted);
   mkdirSync(BIN_DIR, { recursive: true });
+  copyFileSync(extractedUpdater, UPDATER_DEST);
+  chmodSync(UPDATER_DEST, 0o755);
+  // The main executable is the commit point and is installed last.
   copyFileSync(extracted, DEST);
   chmodSync(DEST, 0o755);
   rmSync(tmpDir, { recursive: true, force: true });
@@ -195,5 +241,7 @@ module.exports = {
   platformKey,
   releaseBaseUrl,
   sha256,
+  UPDATER_NAME,
+  verifyWindowsAuthenticode,
   verifyChecksum,
 };
