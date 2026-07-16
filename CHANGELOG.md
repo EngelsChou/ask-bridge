@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Release workflow 改為只建置 Windows x86_64 ZIP、`install.exe`、`uninstall.exe` 與 SHA-256 sidecar，不再啟動 Linux 或 macOS runner。
+
 ---
 
 ## [0.3.3] - 2026-07-16

@@ -52,15 +52,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
-            os: macos-15
-            ext: tar.xz
-          - target: x86_64-apple-darwin
-            os: macos-15-intel
-            ext: tar.xz
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            ext: tar.xz
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             ext: zip
@@ -232,12 +223,6 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           expected=(
-            ask-bridge-aarch64-apple-darwin.tar.xz
-            ask-bridge-aarch64-apple-darwin.tar.xz.sha256
-            ask-bridge-x86_64-apple-darwin.tar.xz
-            ask-bridge-x86_64-apple-darwin.tar.xz.sha256
-            ask-bridge-x86_64-unknown-linux-gnu.tar.xz
-            ask-bridge-x86_64-unknown-linux-gnu.tar.xz.sha256
             ask-bridge-x86_64-pc-windows-msvc.zip
             ask-bridge-x86_64-pc-windows-msvc.zip.sha256
             install.exe
