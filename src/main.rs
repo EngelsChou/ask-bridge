@@ -26,6 +26,8 @@ const CHROME_VISIBLE_WINDOW_WIDTH: i32 = 1200;
 const CHROME_VISIBLE_WINDOW_HEIGHT: i32 = 900;
 const CHROME_MIN_VISIBLE_WIDTH: i32 = 320;
 const CHROME_MIN_VISIBLE_HEIGHT: i32 = 240;
+const COPILOT_ACTION_CONTROL_SELECTOR: &str = "button, [role=\"button\"]";
+const COPILOT_DIAGNOSTIC_LOG_MAX_BYTES: u64 = 2 * 1024 * 1024;
 const COPILOT_ATTACHMENT_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const COPILOT_ATTACHMENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const COPILOT_ATTACHMENT_INDICATOR_SELECTOR: &str = concat!(
@@ -414,7 +416,7 @@ impl Provider {
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
             Provider::Copilot => {
-                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], .fai-CopilotMessage"
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [data-message-role=\"assistant\"], [data-role=\"assistant\"], [data-message-type=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], [class*=\"AssistantMessage\"], [class*=\"CopilotMessage\"]"
             }
         }
     }
@@ -427,7 +429,7 @@ impl Provider {
             Provider::Gemini => "model-response",
             Provider::Claude => ".font-claude-response",
             Provider::Copilot => {
-                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], .fai-CopilotMessage"
+                "[data-content=\"ai-message\"], [data-testid*=\"assistant\"], [data-testid*=\"response\"], [data-author=\"assistant\"], [data-message-role=\"assistant\"], [data-role=\"assistant\"], [data-message-type=\"assistant\"], [class*=\"AIMessage\"], [class*=\"AiMessage\"], [class*=\"AssistantMessage\"], [class*=\"CopilotMessage\"]"
             }
         }
     }
@@ -541,8 +543,11 @@ impl Provider {
             Provider::Copilot => {
                 r#"[
                     "button[data-testid*=\"stop\"]",
+                    "[role=\"button\"][data-testid*=\"stop\"]",
                     "button[class*=\"SendButton\"][aria-label*=\"Stop\"]",
                     "button[class*=\"SendButton\"][aria-label*=\"停止\"]",
+                    "[role=\"button\"][class*=\"SendButton\"][aria-label*=\"Stop\"]",
+                    "[role=\"button\"][class*=\"SendButton\"][aria-label*=\"停止\"]",
                     "button[type=\"submit\"][aria-label*=\"Stop\"]",
                     "button[type=\"submit\"][aria-label*=\"停止\"]",
                     "button[aria-label*=\"Stop generating\"]",
@@ -550,7 +555,13 @@ impl Provider {
                     "button[aria-label=\"Stop\"]",
                     "button[aria-label*=\"停止產生\"]",
                     "button[aria-label*=\"停止回覆\"]",
-                    "button[aria-label*=\"停止回應\"]"
+                    "button[aria-label*=\"停止回應\"]",
+                    "[role=\"button\"][aria-label*=\"Stop generating\"]",
+                    "[role=\"button\"][aria-label*=\"Stop responding\"]",
+                    "[role=\"button\"][aria-label=\"Stop\"]",
+                    "[role=\"button\"][aria-label*=\"停止產生\"]",
+                    "[role=\"button\"][aria-label*=\"停止回覆\"]",
+                    "[role=\"button\"][aria-label*=\"停止回應\"]"
                 ]"#
             }
         }
@@ -606,7 +617,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.5")]
+#[command(version = "0.3.6")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -716,6 +727,60 @@ fn config_file_path() -> Result<PathBuf, String> {
     let mut config_path = home::home_dir().ok_or("Could not locate home directory")?;
     config_path.push(".config/ask-bridge/config.json");
     Ok(config_path)
+}
+
+fn copilot_diagnostic_record(
+    event: &str,
+    details: Value,
+    timestamp_unix_ms: u128,
+    process_id: u32,
+) -> Value {
+    serde_json::json!({
+        "timestamp_unix_ms": timestamp_unix_ms,
+        "process_id": process_id,
+        "event": event,
+        "details": details
+    })
+}
+
+fn append_copilot_diagnostic(event: &str, details: Value) {
+    let result = (|| -> Result<(), String> {
+        let mut directory =
+            home::home_dir().ok_or_else(|| "Could not locate home directory".to_string())?;
+        directory.push(".config/ask-bridge");
+        std::fs::create_dir_all(&directory)
+            .map_err(|e| format!("Failed to create diagnostic directory: {}", e))?;
+
+        let path = directory.join("copilot-diagnostics.jsonl");
+        if path
+            .metadata()
+            .map(|metadata| metadata.len() >= COPILOT_DIAGNOSTIC_LOG_MAX_BYTES)
+            .unwrap_or(false)
+        {
+            let previous = directory.join("copilot-diagnostics.previous.jsonl");
+            let _ = std::fs::remove_file(&previous);
+            std::fs::rename(&path, &previous)
+                .map_err(|e| format!("Failed to rotate diagnostic log: {}", e))?;
+        }
+
+        let timestamp_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let record =
+            copilot_diagnostic_record(event, details, timestamp_unix_ms, std::process::id());
+        let encoded = serde_json::to_string(&record)
+            .map_err(|e| format!("Failed to encode diagnostic record: {}", e))?;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|e| format!("Failed to open diagnostic log: {}", e))?;
+        writeln!(file, "{}", encoded).map_err(|e| format!("Failed to append diagnostic log: {}", e))
+    })();
+
+    // Diagnostics must never block a prompt or expose a secondary failure to MCP clients.
+    let _ = result;
 }
 
 fn parse_configured_provider(content: &str) -> Result<Option<Provider>, String> {
@@ -3331,10 +3396,42 @@ mod tests {
                 .iter()
                 .any(|selector| selector.contains("停止"))
         );
+        assert!(
+            stop_selectors
+                .iter()
+                .any(|selector| selector.contains("[role=\"button\"]"))
+        );
 
         let response_selector = Provider::Copilot.latest_response_selector();
-        assert!(response_selector.contains(".fai-CopilotMessage"));
-        assert!(!response_selector.contains("[class*=\"CopilotMessage\"]"));
+        assert!(response_selector.contains("[class*=\"CopilotMessage\"]"));
+        assert!(response_selector.contains("[data-message-role=\"assistant\"]"));
+        assert!(
+            Provider::Copilot
+                .assistant_selector()
+                .contains("AssistantMessage")
+        );
+        assert!(COPILOT_ACTION_CONTROL_SELECTOR.contains("[role=\"button\"]"));
+    }
+
+    #[test]
+    fn copilot_diagnostic_records_only_structured_metadata() {
+        let record = copilot_diagnostic_record(
+            "response_poll",
+            serde_json::json!({
+                "status": "done",
+                "assistant_count": 1,
+                "response_action_count": 1
+            }),
+            1234,
+            5678,
+        );
+
+        assert_eq!(record["timestamp_unix_ms"], 1234);
+        assert_eq!(record["process_id"], 5678);
+        assert_eq!(record["event"], "response_poll");
+        assert_eq!(record["details"]["status"], "done");
+        assert!(record.get("prompt").is_none());
+        assert!(record.get("response").is_none());
     }
 
     #[test]
@@ -4604,6 +4701,12 @@ fn write_clipboard(content: &str) -> Result<(), String> {
 fn click_latest_copy_button(config_path: &str, provider: Provider) -> Result<(), String> {
     let response_selector = serde_json::to_string(provider.latest_response_selector())
         .map_err(|e| format!("Failed to serialize response selector: {}", e))?;
+    let action_control_selector = serde_json::to_string(if provider == Provider::Copilot {
+        COPILOT_ACTION_CONTROL_SELECTOR
+    } else {
+        "button"
+    })
+    .map_err(|e| format!("Failed to serialize action control selector: {}", e))?;
     let script = r#"() => {
                 const isVisible = (el) => {
                     if (!el || el.disabled || el.getAttribute('aria-disabled') === 'true') return false;
@@ -4613,12 +4716,30 @@ fn click_latest_copy_button(config_path: &str, provider: Provider) -> Result<(),
                     return rect.width > 0 && rect.height > 0;
                 };
 
-                const labelOf = (el) => [
-                    el.getAttribute('aria-label'),
-                    el.getAttribute('title'),
-                    el.getAttribute('data-testid'),
-                    el.textContent
-                ].filter(Boolean).join(' ');
+                const labelOf = (el) => {
+                    const descendants = Array.from(el.querySelectorAll(
+                        '[aria-label], [title], [data-testid], [data-icon-name], [data-icon], [data-automation-id]'
+                    )).slice(0, 12);
+                    return [
+                        el.getAttribute('aria-label'),
+                        el.getAttribute('title'),
+                        el.getAttribute('data-testid'),
+                        el.getAttribute('data-icon-name'),
+                        el.getAttribute('data-icon'),
+                        el.getAttribute('data-automation-id'),
+                        el.getAttribute('name'),
+                        el.getAttribute('value'),
+                        ...descendants.flatMap((child) => [
+                            child.getAttribute('aria-label'),
+                            child.getAttribute('title'),
+                            child.getAttribute('data-testid'),
+                            child.getAttribute('data-icon-name'),
+                            child.getAttribute('data-icon'),
+                            child.getAttribute('data-automation-id')
+                        ]),
+                        el.textContent
+                    ].filter(Boolean).join(' ');
+                };
 
                 const isCopyButton = (el) => {
                     const label = labelOf(el);
@@ -4652,7 +4773,7 @@ fn click_latest_copy_button(config_path: &str, provider: Provider) -> Result<(),
                 ].filter(Boolean);
 
                 for (const scope of scopes) {
-                    const buttons = Array.from(scope.querySelectorAll('button'));
+                    const buttons = Array.from(scope.querySelectorAll(__ACTION_CONTROL_SELECTOR__));
                     const candidates = buttons
                         .map((button) => ({ button, score: copyButtonScore(button) }))
                         .filter((candidate) => candidate.score >= 0)
@@ -4666,7 +4787,8 @@ fn click_latest_copy_button(config_path: &str, provider: Provider) -> Result<(),
 
                 return { ok: false, reason: "Copy response button not found" };
             }"#
-    .replace("__RESPONSE_SELECTOR__", &response_selector);
+    .replace("__RESPONSE_SELECTOR__", &response_selector)
+    .replace("__ACTION_CONTROL_SELECTOR__", &action_control_selector);
     let res = call_mcp_tool(
         config_path,
         "evaluate_script",
@@ -4843,8 +4965,24 @@ fn open_url_tab(
 
 fn copy_latest_markdown(config_path: &str, provider: Provider) -> Result<String, String> {
     match copy_latest_markdown_via_clipboard(config_path, provider) {
-        Ok(content) => Ok(content),
-        Err(_) => scrape_latest_markdown_from_dom(config_path, provider),
+        Ok(content) => {
+            if provider == Provider::Copilot {
+                append_copilot_diagnostic(
+                    "response_extract_method",
+                    serde_json::json!({ "method": "clipboard" }),
+                );
+            }
+            Ok(content)
+        }
+        Err(_) => {
+            if provider == Provider::Copilot {
+                append_copilot_diagnostic(
+                    "response_extract_method",
+                    serde_json::json!({ "method": "dom_fallback" }),
+                );
+            }
+            scrape_latest_markdown_from_dom(config_path, provider)
+        }
     }
 }
 
@@ -4920,6 +5058,12 @@ fn scrape_latest_markdown_from_dom(
         .map_err(|e| format!("Failed to serialize response selector: {}", e))?;
     let content_selector = serde_json::to_string(provider.response_content_selector())
         .map_err(|e| format!("Failed to serialize response content selector: {}", e))?;
+    let action_control_selector = serde_json::to_string(if provider == Provider::Copilot {
+        COPILOT_ACTION_CONTROL_SELECTOR
+    } else {
+        "button"
+    })
+    .map_err(|e| format!("Failed to serialize action control selector: {}", e))?;
     let inspect_js = r#"() => {
         const latestSelector = __LATEST_SELECTOR__;
         const contentSelector = __CONTENT_SELECTOR__;
@@ -4934,13 +5078,29 @@ fn scrape_latest_markdown_from_dom(
                 ((el.innerText || el.textContent || '').trim().length > 0));
         let latest = messages[messages.length - 1];
         if (!latest) {
-            const labelOf = (el) => [
-                el.getAttribute('aria-label'),
-                el.getAttribute('title'),
-                el.getAttribute('data-testid'),
-                el.textContent
-            ].filter(Boolean).join(' ');
-            const copyButtons = Array.from(document.querySelectorAll('button'))
+            const labelOf = (el) => {
+                const descendants = Array.from(el.querySelectorAll(
+                    '[aria-label], [title], [data-testid], [data-icon-name], [data-icon], [data-automation-id]'
+                )).slice(0, 12);
+                return [
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('title'),
+                    el.getAttribute('data-testid'),
+                    el.getAttribute('data-icon-name'),
+                    el.getAttribute('data-icon'),
+                    el.getAttribute('data-automation-id'),
+                    ...descendants.flatMap((child) => [
+                        child.getAttribute('aria-label'),
+                        child.getAttribute('title'),
+                        child.getAttribute('data-testid'),
+                        child.getAttribute('data-icon-name'),
+                        child.getAttribute('data-icon'),
+                        child.getAttribute('data-automation-id')
+                    ]),
+                    el.textContent
+                ].filter(Boolean).join(' ');
+            };
+            const copyButtons = Array.from(document.querySelectorAll(__ACTION_CONTROL_SELECTOR__))
                 .filter((button) => {
                     const label = labelOf(button);
                     return /copy|複製|复制|コピー|복사/i.test(label) &&
@@ -5071,7 +5231,8 @@ fn scrape_latest_markdown_from_dom(
         return elementToMarkdown(turn);
     }"#
     .replace("__LATEST_SELECTOR__", &latest_selector)
-    .replace("__CONTENT_SELECTOR__", &content_selector);
+    .replace("__CONTENT_SELECTOR__", &content_selector)
+    .replace("__ACTION_CONTROL_SELECTOR__", &action_control_selector);
 
     let res = call_mcp_tool(
         config_path,
@@ -7964,6 +8125,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Error starting Chrome: {}", e);
         std::process::exit(1);
     }
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "chrome_ready",
+            serde_json::json!({
+                "headless": is_headless,
+                "debug_port": 9223
+            }),
+        );
+    }
 
     if let Some(command) = cli.command {
         match command {
@@ -8329,17 +8499,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // provide a more durable completion marker than a single message selector.
     let assistant_selector = serde_json::to_string(provider.assistant_selector())
         .map_err(|e| format!("Failed to serialize assistant selector: {}", e))?;
+    let copilot_action_control_selector = serde_json::to_string(COPILOT_ACTION_CONTROL_SELECTOR)
+        .map_err(|e| format!("Failed to serialize Copilot action selector: {}", e))?;
     let initial_count_js = r#"() => {
             if (!__IS_COPILOT__) {
                 return document.querySelectorAll(__ASSISTANT_SELECTOR__).length;
             }
-            const labelOf = (el) => [
-                el.getAttribute('aria-label'),
-                el.getAttribute('title'),
-                el.getAttribute('data-testid'),
-                el.textContent
-            ].filter(Boolean).join(' ');
-            return Array.from(document.querySelectorAll('button'))
+            const labelOf = (el) => {
+                const descendants = Array.from(el.querySelectorAll(
+                    '[aria-label], [title], [data-testid], [data-icon-name], [data-icon], [data-automation-id]'
+                )).slice(0, 12);
+                return [
+                    el.getAttribute('aria-label'),
+                    el.getAttribute('title'),
+                    el.getAttribute('data-testid'),
+                    el.getAttribute('data-icon-name'),
+                    el.getAttribute('data-icon'),
+                    el.getAttribute('data-automation-id'),
+                    ...descendants.flatMap((child) => [
+                        child.getAttribute('aria-label'),
+                        child.getAttribute('title'),
+                        child.getAttribute('data-testid'),
+                        child.getAttribute('data-icon-name'),
+                        child.getAttribute('data-icon'),
+                        child.getAttribute('data-automation-id')
+                    ]),
+                    el.textContent
+                ].filter(Boolean).join(' ');
+            };
+            return Array.from(document.querySelectorAll(__COPILOT_ACTION_SELECTOR__))
                 .filter((button) => {
                     const label = labelOf(button);
                     return /copy|複製|复制|コピー|복사/i.test(label) &&
@@ -8355,7 +8543,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "false"
         },
     )
-    .replace("__ASSISTANT_SELECTOR__", &assistant_selector);
+    .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
+    .replace(
+        "__COPILOT_ACTION_SELECTOR__",
+        &copilot_action_control_selector,
+    );
     let count_res = call_mcp_tool(
         &config_path,
         "evaluate_script",
@@ -8367,6 +8559,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as usize;
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "prompt_ready",
+            serde_json::json!({
+                "prompt_character_count": prompt.chars().count(),
+                "image_count": cli.images.len(),
+                "file_count": cli.files.len(),
+                "initial_response_marker_count": initial_response_count
+            }),
+        );
+    }
 
     if command_verbose {
         println!("Setting prompt text and submitting...");
@@ -8379,6 +8582,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         command_verbose,
     )
     .map_err(|e| format!("Text entry or submission failed: {}", e))?;
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "prompt_submitted",
+            serde_json::json!({
+                "submitted": true,
+                "attachment_count": cli.images.len() + cli.files.len()
+            }),
+        );
+    }
 
     if command_verbose {
         println!("Prompt submitted successfully: {}", status);
@@ -8391,6 +8603,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut finished = false;
     let mut wait_cycles = 0;
     let mut stable_done_checks = 0;
+    let mut last_copilot_poll_signature: Option<String> = None;
     let spinner_frames = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let mut spinner_idx = 0;
 
@@ -8425,13 +8638,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     const stopButton = stopSelectors.map((selector) => document.querySelector(selector)).find(isVisible);
                     const messages = document.querySelectorAll(__ASSISTANT_SELECTOR__);
                     const assistantIsNew = messages.length > __INITIAL_COUNT__;
-                    const labelOf = (el) => [
-                        el.getAttribute('aria-label'),
-                        el.getAttribute('title'),
-                        el.getAttribute('data-testid'),
-                        el.textContent
-                    ].filter(Boolean).join(' ');
-                    const copilotResponseCount = Array.from(document.querySelectorAll('button'))
+                    const labelOf = (el) => {
+                        const descendants = Array.from(el.querySelectorAll(
+                            '[aria-label], [title], [data-testid], [data-icon-name], [data-icon], [data-automation-id]'
+                        )).slice(0, 12);
+                        return [
+                            el.getAttribute('aria-label'),
+                            el.getAttribute('title'),
+                            el.getAttribute('data-testid'),
+                            el.getAttribute('data-icon-name'),
+                            el.getAttribute('data-icon'),
+                            el.getAttribute('data-automation-id'),
+                            ...descendants.flatMap((child) => [
+                                child.getAttribute('aria-label'),
+                                child.getAttribute('title'),
+                                child.getAttribute('data-testid'),
+                                child.getAttribute('data-icon-name'),
+                                child.getAttribute('data-icon'),
+                                child.getAttribute('data-automation-id')
+                            ]),
+                            el.textContent
+                        ].filter(Boolean).join(' ');
+                    };
+                    const copilotResponseCount = Array.from(document.querySelectorAll(__COPILOT_ACTION_SELECTOR__))
                         .filter((button) => {
                             const label = labelOf(button);
                             return /copy|複製|复制|コピー|복사/i.test(label) &&
@@ -8440,25 +8669,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }).length;
                     const copilotResponseIsNew = copilotResponseCount > __INITIAL_COUNT__;
                     const isNew = __IS_COPILOT__ ? copilotResponseIsNew : assistantIsNew;
+                    const pollResult = (status, isNewValue) => ({
+                        status,
+                        isNew: isNewValue,
+                        stopVisible: isVisible(stopButton),
+                        assistantCount: messages.length,
+                        responseActionCount: copilotResponseCount,
+                        generationSeen: Boolean(window.__ask_bridge_generation_seen)
+                    });
                     
                     if (isVisible(stopButton)) {
                         if (__IS_COPILOT__) window.__ask_bridge_generation_seen = true;
-                        return { status: "generating", isNew: isNew };
+                        return pollResult("generating", isNew);
                     }
 
                     if (__IS_COPILOT__ && window.__ask_bridge_generation_seen) {
-                        return { status: "done", isNew: true };
+                        return pollResult("done", true);
                     }
                     
                     if (isNew) {
-                        return { status: "done", isNew: isNew };
+                        return pollResult("done", isNew);
                     }
                     
-                    return { status: "waiting", isNew: isNew };
+                    return pollResult("waiting", isNew);
                 }"#
             .replace("__STOP_SELECTORS__", stop_selectors)
             .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
             .replace("__INITIAL_COUNT__", &initial_response_count.to_string())
+            .replace(
+                "__COPILOT_ACTION_SELECTOR__",
+                &copilot_action_control_selector,
+            )
             .replace(
                 "__IS_COPILOT__",
                 if provider == Provider::Copilot {
@@ -8490,6 +8731,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
 
             if let Ok(parsed) = parse_script_result(&check_res) {
+                if provider == Provider::Copilot {
+                    let diagnostic = serde_json::json!({
+                        "status": parsed["status"],
+                        "is_new": parsed["isNew"],
+                        "stop_visible": parsed["stopVisible"],
+                        "assistant_count": parsed["assistantCount"],
+                        "response_action_count": parsed["responseActionCount"],
+                        "generation_seen": parsed["generationSeen"]
+                    });
+                    if let Ok(signature) = serde_json::to_string(&diagnostic)
+                        && last_copilot_poll_signature.as_deref() != Some(&signature)
+                    {
+                        append_copilot_diagnostic("response_poll", diagnostic);
+                        last_copilot_poll_signature = Some(signature);
+                    }
+                }
                 let status = parsed["status"].as_str().unwrap_or("waiting");
                 let is_new = parsed["isNew"].as_bool().unwrap_or(false);
 
@@ -8514,12 +8771,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if !finished {
+        if provider == Provider::Copilot {
+            append_copilot_diagnostic(
+                "response_timeout",
+                serde_json::json!({
+                    "timeout_seconds": cli.timeout,
+                    "wait_cycles": wait_cycles,
+                    "stable_done_checks": stable_done_checks
+                }),
+            );
+        }
         return Err(format!(
             "{} response did not complete within the timeout period ({} seconds)",
             provider.display_name(),
             cli.timeout
         )
         .into());
+    }
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "response_complete",
+            serde_json::json!({
+                "wait_cycles": wait_cycles,
+                "stable_done_checks": stable_done_checks
+            }),
+        );
     }
 
     if command_verbose {
@@ -8541,6 +8817,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             provider.display_name()
         )
         .into());
+    }
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "response_extracted",
+            serde_json::json!({
+                "response_character_count": last_markdown.chars().count()
+            }),
+        );
     }
 
     if let Err(e) = render_markdown(&last_markdown, use_glow) {

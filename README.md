@@ -85,7 +85,7 @@ Start-Process "https://github.com/EngelsChou/ask-bridge/releases/latest"
 請從最新版 Release 下載同一版本的 `install.exe` 與 `uninstall.exe`。若檔案具有數位簽章，可在「內容 → 數位簽章」確認簽署者；Release 未設定 Authenticode 憑證時仍會發布未簽章的 Windows 安裝檔，Windows 可能顯示「不明的發行者」。安裝是使用者層級，不需要系統管理員權限。
 
 > [!IMPORTANT]
-> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.5 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
+> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.6 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
 
 既有 v0.3.0 或更舊的 macOS/Linux 安裝沒有雜湊綁定的版本紀錄，第一次遷移必須明確允許取代：
 
@@ -275,6 +275,14 @@ Verbose 模式會顯示類似以下流程：
 - 送出訊息。
 - 等待 provider 回覆。
 
+使用 Microsoft 365 Copilot 時，ask-bridge 也會將 Chrome 啟動、提問送出、等待狀態、完成判定與回答擷取方式記錄到：
+
+```text
+%USERPROFILE%\.config\ask-bridge\copilot-diagnostics.jsonl
+```
+
+檔案超過 2 MiB 時會輪替成 `copilot-diagnostics.previous.jsonl`。診斷紀錄只包含狀態、計數、耗時等結構化資訊，不會保存問題、回答內容、Cookie、權杖或登入資料。
+
 ### 6. 回應超時（`--timeout`）
 
 回答等待預設 300 秒，若 provider 回應時間較長可提高（或降低）等待上限：
@@ -416,7 +424,7 @@ ask-bridge update
 
 具有內嵌受信任簽章指紋的 Windows build 會下載最新版 Release 的 `install.exe`，驗證有效的 Engels Chou Authenticode 簽章、固定憑證指紋及版本下限後才執行；未簽章 Windows build 會安全拒絕自動更新，請改從 Release 手動下載。macOS/Linux 會執行固定在 `main-add-m365-copilot` 的安裝腳本並傳入目前版本下限。
 
-v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.5 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
+v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.6 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
 
 ## 運作原理
 
