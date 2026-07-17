@@ -606,7 +606,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.4")]
+#[command(version = "0.3.5")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -3907,6 +3907,66 @@ mod tests {
             LoginState::LoggedOut
         );
         assert_eq!(auth_path.state(Provider::ChatGpt), LoginState::LoggedOut);
+    }
+
+    #[test]
+    fn direct_query_opens_login_and_continues_after_success() {
+        let mut opened_login = false;
+        let mut waited_with_timeout = None;
+
+        complete_query_login_with(
+            Provider::Copilot,
+            37,
+            || {
+                opened_login = true;
+                Ok(())
+            },
+            |timeout| {
+                waited_with_timeout = Some(timeout);
+                (LoginState::LoggedIn, false)
+            },
+        )
+        .expect("successful automatic login should continue the original query");
+
+        assert!(opened_login);
+        assert_eq!(waited_with_timeout, Some(37));
+    }
+
+    #[test]
+    fn direct_query_login_timeout_stops_before_sending_the_prompt() {
+        let mut opened_login = false;
+        let error = complete_query_login_with(
+            Provider::Copilot,
+            12,
+            || {
+                opened_login = true;
+                Ok(())
+            },
+            |_| (LoginState::LoggedOut, true),
+        )
+        .expect_err("an incomplete login must not send the original query");
+
+        assert!(opened_login);
+        assert!(error.contains("Timed out after 12 seconds"));
+        assert!(error.contains("Microsoft 365 Copilot"));
+    }
+
+    #[test]
+    fn direct_query_does_not_wait_when_login_window_cannot_be_shown() {
+        let mut waited_for_login = false;
+        let error = complete_query_login_with(
+            Provider::Copilot,
+            300,
+            || Err("could not restore Chrome".to_string()),
+            |_| {
+                waited_for_login = true;
+                (LoginState::LoggedIn, false)
+            },
+        )
+        .expect_err("window restore failures must be reported immediately");
+
+        assert_eq!(error, "could not restore Chrome");
+        assert!(!waited_for_login);
     }
 
     #[test]
@@ -7635,6 +7695,69 @@ fn wait_for_login_completion(
     }
 }
 
+fn complete_query_login_with<ShowLogin, WaitForLogin>(
+    provider: Provider,
+    timeout_seconds: u64,
+    mut show_login: ShowLogin,
+    mut wait_for_login: WaitForLogin,
+) -> Result<(), String>
+where
+    ShowLogin: FnMut() -> Result<(), String>,
+    WaitForLogin: FnMut(u64) -> (LoginState, bool),
+{
+    show_login()?;
+    let (login_state, timed_out) = wait_for_login(timeout_seconds);
+    if login_state == LoginState::LoggedIn {
+        return Ok(());
+    }
+
+    let status = match login_state {
+        LoginState::LoggedOut => "login still appears incomplete",
+        LoginState::Unknown => "login status is still unknown",
+        LoginState::LoggedIn => unreachable!("logged-in state returned above"),
+    };
+    let timing = if timed_out { "Timed out" } else { "Stopped" };
+    Err(format!(
+        "{} after {} seconds waiting for {} login; {}. Complete sign-in in the Chrome window, then retry.",
+        timing,
+        timeout_seconds.max(1),
+        provider.display_name(),
+        status
+    ))
+}
+
+fn complete_query_login(
+    config_path: &str,
+    provider: Provider,
+    timeout_seconds: u64,
+    verbose: bool,
+) -> Result<(), String> {
+    println!(
+        "\n{} is not logged in. Opening Chrome for sign-in...",
+        provider.display_name()
+    );
+    println!(
+        "Complete sign-in in Chrome. Your original query will continue automatically afterward.\n"
+    );
+
+    complete_query_login_with(
+        provider,
+        timeout_seconds,
+        || {
+            start_chrome_if_needed(false, verbose)?;
+            let headful_config_path = write_mcp_config(!verbose, false)?;
+            ensure_provider_tab(&headful_config_path, provider, false, false, verbose)
+        },
+        |timeout| wait_for_login_completion(config_path, provider, timeout, verbose),
+    )?;
+
+    println!(
+        "Success: {} login detected. Continuing the original query...",
+        provider.display_name()
+    );
+    Ok(())
+}
+
 fn print_chrome_diagnostics(profile_path: &str) {
     let snapshot = inspect_chrome_debug_port(profile_path);
     let recorded_pid = read_chrome_pid().unwrap_or_else(|| "unknown".to_string());
@@ -8130,15 +8253,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Verify login
     match check_login_status(&config_path, provider, command_verbose) {
         Ok(LoginState::LoggedOut) => {
-            eprintln!(
-                "\nError: You are not logged in to {}.",
-                provider.display_name()
-            );
-            eprintln!(
-                "Please run `ask-bridge --provider {} login` to log in manually first, and then run your query again.\n",
-                provider
-            );
-            std::process::exit(1);
+            if let Err(e) =
+                complete_query_login(&config_path, provider, cli.timeout, command_verbose)
+            {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Ok(LoginState::Unknown) => {
             eprintln!(
