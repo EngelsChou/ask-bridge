@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+---
+
+## [0.3.4] - 2026-07-17
+
+### Fixed
+- 修正 VS Code 重用 ask-bridge 專用 Chrome 時，最小化、尺寸異常或只露出極小區域的視窗被誤判為已顯示；Windows 現在會同步還原視窗、移至可見桌面、重設為可用尺寸並提升至前景。
+
 ### Changed
 - Release workflow 改為只建置 Windows x86_64 ZIP、`install.exe`、`uninstall.exe` 與 SHA-256 sidecar，不再啟動 Linux 或 macOS runner。
 

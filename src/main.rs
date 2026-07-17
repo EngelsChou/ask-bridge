@@ -22,6 +22,10 @@ const CHROME_VISIBLE_WINDOW_POSITION_ARG: &str = "--window-position=80,80";
 const CHROME_BACKGROUND_WINDOW_POSITION_ARG: &str = "--window-position=-2000,-2000";
 const CHROME_VISIBLE_WINDOW_X: i32 = 80;
 const CHROME_VISIBLE_WINDOW_Y: i32 = 80;
+const CHROME_VISIBLE_WINDOW_WIDTH: i32 = 1200;
+const CHROME_VISIBLE_WINDOW_HEIGHT: i32 = 900;
+const CHROME_MIN_VISIBLE_WIDTH: i32 = 320;
+const CHROME_MIN_VISIBLE_HEIGHT: i32 = 240;
 const COPILOT_ATTACHMENT_UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 const COPILOT_ATTACHMENT_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const COPILOT_ATTACHMENT_INDICATOR_SELECTOR: &str = concat!(
@@ -602,7 +606,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.3")]
+#[command(version = "0.3.4")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -1420,7 +1424,7 @@ struct ScreenRect {
     bottom: i32,
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(test)]
 fn screen_rects_intersect(left: ScreenRect, right: ScreenRect) -> bool {
     left.left < left.right
         && left.top < left.bottom
@@ -1430,6 +1434,18 @@ fn screen_rects_intersect(left: ScreenRect, right: ScreenRect) -> bool {
         && left.right > right.left
         && left.top < right.bottom
         && left.bottom > right.top
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn screen_rect_visible_area_at_least(
+    window: ScreenRect,
+    monitor: ScreenRect,
+    minimum_width: i32,
+    minimum_height: i32,
+) -> bool {
+    let visible_width = window.right.min(monitor.right) - window.left.max(monitor.left);
+    let visible_height = window.bottom.min(monitor.bottom) - window.top.max(monitor.top);
+    visible_width >= minimum_width && visible_height >= minimum_height
 }
 
 fn apply_chrome_window_mode_with<F>(
@@ -1569,6 +1585,7 @@ unsafe extern "system" {
     fn SetForegroundWindow(window: NativeWindowHandle) -> i32;
     fn ShowWindowAsync(window: NativeWindowHandle, command: i32) -> i32;
     fn IsWindowVisible(window: NativeWindowHandle) -> i32;
+    fn IsIconic(window: NativeWindowHandle) -> i32;
     fn GetWindowRect(window: NativeWindowHandle, rect: *mut NativeRect) -> i32;
     fn MonitorFromRect(rect: *const NativeRect, flags: u32) -> NativeMonitorHandle;
     fn GetMonitorInfoW(monitor: NativeMonitorHandle, info: *mut NativeMonitorInfo) -> i32;
@@ -1665,7 +1682,7 @@ unsafe fn chrome_window_title_length(window: NativeWindowHandle) -> Option<usize
 unsafe fn chrome_window_is_onscreen(window: NativeWindowHandle) -> bool {
     const MONITOR_DEFAULTTONULL: u32 = 0;
 
-    if unsafe { IsWindowVisible(window) } == 0 {
+    if unsafe { IsWindowVisible(window) } == 0 || unsafe { IsIconic(window) } != 0 {
         return false;
     }
 
@@ -1685,7 +1702,12 @@ unsafe fn chrome_window_is_onscreen(window: NativeWindowHandle) -> bool {
         flags: 0,
     };
     (unsafe { GetMonitorInfoW(monitor, &mut monitor_info) }) != 0
-        && screen_rects_intersect(window_rect.into(), monitor_info.monitor.into())
+        && screen_rect_visible_area_at_least(
+            window_rect.into(),
+            monitor_info.monitor.into(),
+            CHROME_MIN_VISIBLE_WIDTH,
+            CHROME_MIN_VISIBLE_HEIGHT,
+        )
 }
 
 #[cfg(target_os = "windows")]
@@ -1718,10 +1740,7 @@ unsafe extern "system" fn move_visible_chrome_window_callback(
     }
 
     const SW_RESTORE: i32 = 9;
-    const SWP_NOSIZE: u32 = 0x0001;
-    const SWP_NOZORDER: u32 = 0x0004;
     const SWP_SHOWWINDOW: u32 = 0x0040;
-    const SWP_ASYNCWINDOWPOS: u32 = 0x4000;
     unsafe {
         ShowWindowAsync(window, SW_RESTORE);
     }
@@ -1731,9 +1750,9 @@ unsafe extern "system" fn move_visible_chrome_window_callback(
             std::ptr::null_mut(),
             CHROME_VISIBLE_WINDOW_X,
             CHROME_VISIBLE_WINDOW_Y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
+            CHROME_VISIBLE_WINDOW_WIDTH,
+            CHROME_VISIBLE_WINDOW_HEIGHT,
+            SWP_SHOWWINDOW,
         )
     } != 0;
     if moved && unsafe { chrome_window_is_onscreen(window) } {
@@ -4192,6 +4211,61 @@ mod tests {
                 bottom: 200,
             },
             monitor
+        ));
+    }
+
+    #[test]
+    fn chrome_window_visibility_requires_a_meaningful_monitor_area() {
+        let monitor = ScreenRect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+
+        assert!(screen_rect_visible_area_at_least(
+            ScreenRect {
+                left: 80,
+                top: 80,
+                right: 1280,
+                bottom: 980,
+            },
+            monitor,
+            CHROME_MIN_VISIBLE_WIDTH,
+            CHROME_MIN_VISIBLE_HEIGHT,
+        ));
+        assert!(!screen_rect_visible_area_at_least(
+            ScreenRect {
+                left: 80,
+                top: 80,
+                right: 81,
+                bottom: 81,
+            },
+            monitor,
+            CHROME_MIN_VISIBLE_WIDTH,
+            CHROME_MIN_VISIBLE_HEIGHT,
+        ));
+        assert!(!screen_rect_visible_area_at_least(
+            ScreenRect {
+                left: -1000,
+                top: 80,
+                right: -700,
+                bottom: 500,
+            },
+            monitor,
+            CHROME_MIN_VISIBLE_WIDTH,
+            CHROME_MIN_VISIBLE_HEIGHT,
+        ));
+        assert!(!screen_rect_visible_area_at_least(
+            ScreenRect {
+                left: -100,
+                top: 80,
+                right: 200,
+                bottom: 500,
+            },
+            monitor,
+            CHROME_MIN_VISIBLE_WIDTH,
+            CHROME_MIN_VISIBLE_HEIGHT,
         ));
     }
 
