@@ -5,6 +5,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+$SelfDeletePollMilliseconds = 250
+$SelfDeletePollAttempts = 120
 
 if ($env:OS -ne "Windows_NT") {
     throw "The Windows installer smoke test can only run on Windows."
@@ -75,8 +77,11 @@ try {
         throw "uninstall.exe exited with code $LASTEXITCODE"
     }
 
-    for ($Attempt = 0; $Attempt -lt 20 -and (Test-Path -LiteralPath $Target); $Attempt++) {
-        Start-Sleep -Milliseconds 250
+    # The uninstaller's detached PowerShell helper can take longer to start on
+    # a cold GitHub-hosted runner. Its own bounded retry window is 20 seconds,
+    # so allow up to 30 seconds here while still failing on real leftovers.
+    for ($Attempt = 0; $Attempt -lt $SelfDeletePollAttempts -and (Test-Path -LiteralPath $Target); $Attempt++) {
+        Start-Sleep -Milliseconds $SelfDeletePollMilliseconds
     }
     if (Test-Path -LiteralPath $Target) {
         $Remaining = (Get-ChildItem -LiteralPath $Target -Force | Select-Object -ExpandProperty Name) -join ", "
@@ -150,12 +155,12 @@ try {
         $UninstallProcess.Dispose()
     }
 
-    for ($Attempt = 0; $Attempt -lt 40; $Attempt++) {
+    for ($Attempt = 0; $Attempt -lt $SelfDeletePollAttempts; $Attempt++) {
         $RemainingTombstones = @(Get-ChildItem -LiteralPath $Target -Filter "uninstall.exe.delete-*" -File -ErrorAction SilentlyContinue)
         if ($RemainingTombstones.Count -eq 0) {
             break
         }
-        Start-Sleep -Milliseconds 250
+        Start-Sleep -Milliseconds $SelfDeletePollMilliseconds
     }
     $RemainingTombstones = @(Get-ChildItem -LiteralPath $Target -Filter "uninstall.exe.delete-*" -File -ErrorAction SilentlyContinue)
     if ($RemainingTombstones.Count -ne 0) {
@@ -174,8 +179,8 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Final cleanup uninstaller exited with code $LASTEXITCODE"
     }
-    for ($Attempt = 0; $Attempt -lt 40 -and (Test-Path -LiteralPath $Target); $Attempt++) {
-        Start-Sleep -Milliseconds 250
+    for ($Attempt = 0; $Attempt -lt $SelfDeletePollAttempts -and (Test-Path -LiteralPath $Target); $Attempt++) {
+        Start-Sleep -Milliseconds $SelfDeletePollMilliseconds
     }
     if (Test-Path -LiteralPath $Target) {
         $Remaining = (Get-ChildItem -LiteralPath $Target -Force | Select-Object -ExpandProperty Name) -join ", "
