@@ -6,6 +6,20 @@
 
 ---
 
+## [0.3.7] - 2026-07-21
+
+### Fixed
+- 修正 Microsoft 365 Copilot 多行問題遇到換行時提早送出的問題；改以逐行輸入與 `Shift+Enter` 建立換行，並在送出前核對完整字元與換行數。
+- 修正 Microsoft 365 Copilot 已完成回答卻未回傳到 VS Code／MCP 的問題；回答偵測會同步追蹤回答容器、動作控制項、最新文字簽章及穩定文字候選。
+- 避免多行輸入意外觸發產生後將「停止」控制項誤認為送出按鈕；若明確送出前已開始產生，現在會安全停止並回報錯誤。
+- 修正 Windows PowerShell 安裝器原子替換既有檔案時使用無效備份路徑而失敗的問題。
+- Microsoft 365 Copilot 帳號或租戶沒有 Copilot Chat 權限並導向 `/chat/blocked` 時，現在會立即回報可操作的錯誤且不會送出問題。
+
+### Added
+- Microsoft 365 Copilot 診斷紀錄新增跨程序 request ID、composer 核對資訊與回答完成訊號，方便串接 VS Code／MCP 端到端追蹤，且不記錄問題或回答內容。
+
+---
+
 ## [0.3.6] - 2026-07-17
 
 ### Fixed

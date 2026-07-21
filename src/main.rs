@@ -617,7 +617,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.6")]
+#[command(version = "0.3.7")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -735,12 +735,18 @@ fn copilot_diagnostic_record(
     timestamp_unix_ms: u128,
     process_id: u32,
 ) -> Value {
-    serde_json::json!({
+    let mut record = serde_json::json!({
         "timestamp_unix_ms": timestamp_unix_ms,
         "process_id": process_id,
         "event": event,
         "details": details
-    })
+    });
+    if let Ok(request_id) = std::env::var("ASK_BRIDGE_REQUEST_ID")
+        && !request_id.trim().is_empty()
+    {
+        record["request_id"] = Value::String(request_id);
+    }
+    record
 }
 
 fn append_copilot_diagnostic(event: &str, details: Value) {
@@ -3414,6 +3420,38 @@ mod tests {
     }
 
     #[test]
+    fn copilot_multiline_prompt_uses_shift_enter_without_losing_blank_lines() {
+        assert_eq!(
+            copilot_prompt_input_steps("第一行\r\n\r\n第三行\n"),
+            vec![
+                CopilotPromptInputStep::Text("第一行".to_string()),
+                CopilotPromptInputStep::LineBreak,
+                CopilotPromptInputStep::LineBreak,
+                CopilotPromptInputStep::Text("第三行".to_string()),
+                CopilotPromptInputStep::LineBreak,
+            ]
+        );
+    }
+
+    #[test]
+    fn copilot_single_line_prompt_remains_one_text_step() {
+        assert_eq!(
+            copilot_prompt_input_steps("single line"),
+            vec![CopilotPromptInputStep::Text("single line".to_string())]
+        );
+    }
+
+    #[test]
+    fn copilot_blocked_page_reports_missing_entitlement_without_claiming_prompt_submission() {
+        let error = copilot_blocked_page_error("https://m365.cloud.microsoft/chat/blocked")
+            .expect("blocked Copilot URL should be actionable");
+        assert!(error.contains("unavailable for this account or tenant"));
+        assert!(error.contains("Copilot Chat entitlement"));
+        assert!(error.contains("no prompt was sent"));
+        assert!(copilot_blocked_page_error("https://m365.cloud.microsoft/chat/").is_none());
+    }
+
+    #[test]
     fn copilot_diagnostic_records_only_structured_metadata() {
         let record = copilot_diagnostic_record(
             "response_poll",
@@ -4808,6 +4846,50 @@ fn click_latest_copy_button(config_path: &str, provider: Provider) -> Result<(),
     }
 }
 
+fn copilot_blocked_page_error(url: &str) -> Option<String> {
+    let normalized = url.to_ascii_lowercase();
+    if normalized.contains("m365.cloud.microsoft/chat/blocked") {
+        Some(
+            "Microsoft 365 Copilot Chat is unavailable for this account or tenant (M365 redirected to /chat/blocked). Use an account with Copilot Chat entitlement and an enabled tenant policy; no prompt was sent."
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+fn ensure_provider_page_not_blocked(
+    config_path: &str,
+    provider: Provider,
+    phase: &str,
+) -> Result<(), String> {
+    if provider != Provider::Copilot {
+        return Ok(());
+    }
+
+    let result = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": "() => window.location.href" }),
+    )?;
+    let url = parse_script_result(&result)?
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    if let Some(error) = copilot_blocked_page_error(&url) {
+        append_copilot_diagnostic(
+            "copilot_unavailable",
+            serde_json::json!({
+                "reason": "blocked_page",
+                "phase": phase
+            }),
+        );
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
 fn wait_for_page_load(config_path: &str, provider: Provider, verbose: bool) -> Result<(), String> {
     if verbose {
         println!("Waiting for page readyState...");
@@ -4815,7 +4897,10 @@ fn wait_for_page_load(config_path: &str, provider: Provider, verbose: bool) -> R
 
     // Phase 1: Wait for readyState complete or interactive
     let mut ready = false;
-    for _ in 0..90 {
+    for attempt in 0..90 {
+        if attempt % 10 == 0 {
+            ensure_provider_page_not_blocked(config_path, provider, "ready_state")?;
+        }
         let ready_res = call_mcp_tool(
             config_path,
             "evaluate_script",
@@ -4845,7 +4930,10 @@ fn wait_for_page_load(config_path: &str, provider: Provider, verbose: bool) -> R
     }
 
     // Phase 2: Wait for key provider elements to render.
-    for _ in 0..60 {
+    for attempt in 0..60 {
+        if attempt % 10 == 0 {
+            ensure_provider_page_not_blocked(config_path, provider, "page_elements")?;
+        }
         let element_res = call_mcp_tool(
             config_path,
             "evaluate_script",
@@ -7129,6 +7217,7 @@ fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String
                 try {
                     const composerSelectors = __COMPOSER_SELECTORS__;
                     const sendSelectors = __SEND_SELECTORS__;
+                    const stopSelectors = __STOP_SELECTORS__;
                     const attachmentSelector = __ATTACHMENT_SELECTOR__;
                     const expectedAttachmentCount = __EXPECTED_ATTACHMENT_COUNT__;
                     const isVisible = (el) => {
@@ -7199,6 +7288,17 @@ fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String
                         !el.disabled &&
                         el.getAttribute('aria-disabled') !== 'true' &&
                         isVisible(el);
+                    const labelOf = (el) => [
+                        el?.getAttribute('aria-label'),
+                        el?.getAttribute('title'),
+                        el?.getAttribute('data-testid'),
+                        el?.textContent
+                    ].filter(Boolean).join(' ');
+                    const isStopControl = (el) =>
+                        /stop|停止|中止|取消生成|取消產生|取消回覆|取消回应/i.test(labelOf(el));
+                    const visibleStopButton = () => stopSelectors
+                        .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                        .find((button) => isClickable(button));
                     const composerForm = composer.closest('form');
                     const composerWrapper = composer.closest(
                         '[data-testid*="composer"], [data-testid*="chat-input"], [class*="Composer"], [class*="ChatInput"], [class*="PromptInput"]'
@@ -7225,13 +7325,19 @@ fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String
                             for (const button of document.querySelectorAll(selector)) {
                                 if (seen.has(button)) continue;
                                 seen.add(button);
-                                if (isClickable(button) && belongsToComposer(button)) return button;
+                                if (isClickable(button) && belongsToComposer(button) && !isStopControl(button)) {
+                                    return button;
+                                }
                             }
                         }
                         return null;
                     };
 
                     for (let i = 0; i < 150; i++) {
+                        if (visibleStopButton()) {
+                            window.__submit_status = 'error: Copilot started generating before the explicit Send click';
+                            return;
+                        }
                         const button = findSendButton();
                         if (button) {
                             // This guard and click deliberately share one synchronous
@@ -7276,11 +7382,133 @@ fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String
         "__SEND_SELECTORS__",
         Provider::Copilot.send_button_selectors_json(),
     )
+    .replace(
+        "__STOP_SELECTORS__",
+        Provider::Copilot.stop_button_selectors_json(),
+    )
     .replace("__ATTACHMENT_SELECTOR__", &attachment_selector_json)
     .replace(
         "__EXPECTED_ATTACHMENT_COUNT__",
         &expected_indicator_count.to_string(),
     ))
+}
+
+#[derive(Debug, PartialEq)]
+enum CopilotPromptInputStep {
+    Text(String),
+    LineBreak,
+}
+
+fn copilot_prompt_input_steps(prompt: &str) -> Vec<CopilotPromptInputStep> {
+    let normalized = prompt.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let mut steps = Vec::with_capacity(lines.len().saturating_mul(2).saturating_sub(1));
+
+    for (index, line) in lines.iter().enumerate() {
+        if !line.is_empty() {
+            steps.push(CopilotPromptInputStep::Text((*line).to_string()));
+        }
+        if index + 1 < lines.len() {
+            steps.push(CopilotPromptInputStep::LineBreak);
+        }
+    }
+
+    steps
+}
+
+fn type_copilot_prompt(config_path: &str, prompt: &str) -> Result<(), String> {
+    for step in copilot_prompt_input_steps(prompt) {
+        match step {
+            CopilotPromptInputStep::Text(text) => {
+                call_mcp_tool(
+                    config_path,
+                    "type_text",
+                    serde_json::json!({ "text": text }),
+                )?;
+            }
+            // DevTools type_text treats a newline as Enter in the Copilot
+            // composer, which submits the partial prompt. Insert line breaks
+            // explicitly with the composer's non-submit keyboard shortcut.
+            CopilotPromptInputStep::LineBreak => {
+                press_composer_key(config_path, "Shift+Enter")?;
+            }
+        }
+    }
+
+    verify_copilot_composer_prompt(config_path, prompt)
+}
+
+fn verify_copilot_composer_prompt(config_path: &str, prompt: &str) -> Result<(), String> {
+    let expected_json = serde_json::to_string(prompt)
+        .map_err(|e| format!("Failed to serialize expected Copilot prompt: {}", e))?;
+    let js = r#"() => {
+            const composerSelectors = __COMPOSER_SELECTORS__;
+            const expected = __EXPECTED_PROMPT__;
+            const isVisible = (el) => {
+                if (!el) return false;
+                const style = window.getComputedStyle(el);
+                const rect = el.getBoundingClientRect();
+                return style.display !== 'none' && style.visibility !== 'hidden' &&
+                    style.opacity !== '0' && rect.width > 0 && rect.height > 0;
+            };
+            const composer = composerSelectors
+                .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+                .find(isVisible);
+            if (!composer) return { ok: false, error: 'visible composer not found' };
+            const normalize = (value) => String(value ?? '')
+                .replace(/\r\n?/g, '\n')
+                .replace(/[\u200B-\u200D\uFEFF]/g, '')
+                .replace(/\u00A0/g, ' ');
+            const actual = normalize(typeof composer.value !== 'undefined'
+                ? composer.value
+                : (composer.innerText || composer.textContent || ''));
+            const wanted = normalize(expected);
+            return {
+                ok: actual === wanted,
+                actualLength: Array.from(actual).length,
+                expectedLength: Array.from(wanted).length,
+                actualLineBreaks: (actual.match(/\n/g) || []).length,
+                expectedLineBreaks: (wanted.match(/\n/g) || []).length
+            };
+        }"#
+    .replace(
+        "__COMPOSER_SELECTORS__",
+        Provider::Copilot.composer_selectors_json(),
+    )
+    .replace("__EXPECTED_PROMPT__", &expected_json);
+
+    let result = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({ "function": js }),
+    )?;
+    let parsed = parse_script_result(&result)?;
+    let ok = parsed
+        .get("ok")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
+    append_copilot_diagnostic(
+        "prompt_composer_verified",
+        serde_json::json!({
+            "verified": ok,
+            "actual_character_count": parsed["actualLength"],
+            "expected_character_count": parsed["expectedLength"],
+            "actual_line_break_count": parsed["actualLineBreaks"],
+            "expected_line_break_count": parsed["expectedLineBreaks"]
+        }),
+    );
+
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "Copilot composer content did not match the complete prompt (expected {} characters / {} line breaks, found {} / {})",
+            parsed["expectedLength"].as_u64().unwrap_or(0),
+            parsed["expectedLineBreaks"].as_u64().unwrap_or(0),
+            parsed["actualLength"].as_u64().unwrap_or(0),
+            parsed["actualLineBreaks"].as_u64().unwrap_or(0)
+        ))
+    }
 }
 
 fn submit_copilot_prompt(
@@ -7306,13 +7534,7 @@ fn submit_copilot_prompt(
         // composer without clearing it so the uploaded attachment chips remain.
         focus_composer(config_path, Provider::Copilot)?;
     }
-    call_mcp_tool(
-        config_path,
-        "type_text",
-        serde_json::json!({
-            "text": prompt
-        }),
-    )?;
+    type_copilot_prompt(config_path, prompt)?;
     if attachment_receipt.is_empty() {
         // Fail closed immediately before clicking Send. A stale chip appearing
         // while trusted text entry ran must never be mixed into this request.
@@ -7716,6 +7938,9 @@ fn ensure_provider_tab(
         println!("Waiting for {} to load...", provider.display_name());
     }
     for attempt in 0..90 {
+        if attempt % 10 == 0 {
+            ensure_provider_page_not_blocked(config_path, provider, "provider_ready")?;
+        }
         if attempt > 0 && attempt % 10 == 0 {
             let page_opt = call_mcp_tool(config_path, "list_pages", serde_json::json!({}))
                 .ok()
@@ -8502,8 +8727,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let copilot_action_control_selector = serde_json::to_string(COPILOT_ACTION_CONTROL_SELECTOR)
         .map_err(|e| format!("Failed to serialize Copilot action selector: {}", e))?;
     let initial_count_js = r#"() => {
+            const messages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__));
+            const signatureOf = (value) => {
+                const text = String(value || '').trim();
+                let hash = 2166136261;
+                for (const character of text) {
+                    hash ^= character.codePointAt(0);
+                    hash = Math.imul(hash, 16777619);
+                }
+                return text.length + ':' + (hash >>> 0).toString(16);
+            };
+            const latestText = messages.length
+                ? (messages[messages.length - 1].innerText || messages[messages.length - 1].textContent || '')
+                : '';
             if (!__IS_COPILOT__) {
-                return document.querySelectorAll(__ASSISTANT_SELECTOR__).length;
+                return {
+                    assistantCount: messages.length,
+                    responseActionCount: 0,
+                    latestAssistantSignature: signatureOf(latestText),
+                    latestAssistantTextLength: Array.from(String(latestText).trim()).length
+                };
             }
             const labelOf = (el) => {
                 const descendants = Array.from(el.querySelectorAll(
@@ -8527,13 +8770,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     el.textContent
                 ].filter(Boolean).join(' ');
             };
-            return Array.from(document.querySelectorAll(__COPILOT_ACTION_SELECTOR__))
+            const responseActionCount = Array.from(document.querySelectorAll(__COPILOT_ACTION_SELECTOR__))
                 .filter((button) => {
                     const label = labelOf(button);
                     return /copy|複製|复制|コピー|복사/i.test(label) &&
                         !/code|程式碼|代码|table|表格/i.test(label) &&
                         !button.closest('pre, code, [class*=\"code\"], [data-testid*=\"code\"]');
                 }).length;
+            return {
+                assistantCount: messages.length,
+                responseActionCount,
+                latestAssistantSignature: signatureOf(latestText),
+                latestAssistantTextLength: Array.from(String(latestText).trim()).length
+            };
         }"#
     .replace(
         "__IS_COPILOT__",
@@ -8555,10 +8804,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "function": initial_count_js
         }),
     )?;
-    let initial_response_count = parse_script_result(&count_res)
-        .ok()
-        .and_then(|v| v.as_u64())
+    let initial_response_state = parse_script_result(&count_res).unwrap_or_else(|_| {
+        serde_json::json!({
+            "assistantCount": 0,
+            "responseActionCount": 0,
+            "latestAssistantSignature": "0:811c9dc5",
+            "latestAssistantTextLength": 0
+        })
+    });
+    let initial_assistant_count = initial_response_state["assistantCount"]
+        .as_u64()
         .unwrap_or(0) as usize;
+    let initial_response_action_count = initial_response_state["responseActionCount"]
+        .as_u64()
+        .unwrap_or(0) as usize;
+    let initial_assistant_signature = initial_response_state["latestAssistantSignature"]
+        .as_str()
+        .unwrap_or("0:811c9dc5");
     if provider == Provider::Copilot {
         append_copilot_diagnostic(
             "prompt_ready",
@@ -8566,7 +8828,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "prompt_character_count": prompt.chars().count(),
                 "image_count": cli.images.len(),
                 "file_count": cli.files.len(),
-                "initial_response_marker_count": initial_response_count
+                "initial_response_marker_count": initial_response_action_count,
+                "initial_assistant_count": initial_assistant_count,
+                "initial_response_action_count": initial_response_action_count,
+                "initial_assistant_text_character_count": initial_response_state["latestAssistantTextLength"]
             }),
         );
     }
@@ -8603,7 +8868,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut finished = false;
     let mut wait_cycles = 0;
     let mut stable_done_checks = 0;
+    let mut stable_candidate_checks = 0;
+    let mut last_candidate_signature: Option<String> = None;
+    let mut completion_signal = "unknown";
     let mut last_copilot_poll_signature: Option<String> = None;
+    let initial_assistant_signature_json = serde_json::to_string(initial_assistant_signature)
+        .map_err(|e| format!("Failed to serialize initial assistant signature: {}", e))?;
     let spinner_frames = vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let mut spinner_idx = 0;
 
@@ -8636,8 +8906,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return rect.width > 0 && rect.height > 0;
                     };
                     const stopButton = stopSelectors.map((selector) => document.querySelector(selector)).find(isVisible);
-                    const messages = document.querySelectorAll(__ASSISTANT_SELECTOR__);
-                    const assistantIsNew = messages.length > __INITIAL_COUNT__;
+                    const messages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__));
+                    const signatureOf = (value) => {
+                        const text = String(value || '').trim();
+                        let hash = 2166136261;
+                        for (const character of text) {
+                            hash ^= character.codePointAt(0);
+                            hash = Math.imul(hash, 16777619);
+                        }
+                        return text.length + ':' + (hash >>> 0).toString(16);
+                    };
+                    const latestText = messages.length
+                        ? (messages[messages.length - 1].innerText || messages[messages.length - 1].textContent || '')
+                        : '';
+                    const latestSignature = signatureOf(latestText);
+                    const responseTextLength = Array.from(String(latestText).trim()).length;
+                    const assistantCountIsNew = messages.length > __INITIAL_ASSISTANT_COUNT__;
+                    const assistantTextChanged = responseTextLength > 0 &&
+                        latestSignature !== __INITIAL_ASSISTANT_SIGNATURE__;
+                    const assistantIsNew = assistantCountIsNew || assistantTextChanged;
                     const labelOf = (el) => {
                         const descendants = Array.from(el.querySelectorAll(
                             '[aria-label], [title], [data-testid], [data-icon-name], [data-icon], [data-automation-id]'
@@ -8667,14 +8954,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 !/code|程式碼|代码|table|表格/i.test(label) &&
                                 !button.closest('pre, code, [class*=\"code\"], [data-testid*=\"code\"]');
                         }).length;
-                    const copilotResponseIsNew = copilotResponseCount > __INITIAL_COUNT__;
-                    const isNew = __IS_COPILOT__ ? copilotResponseIsNew : assistantIsNew;
+                    const copilotResponseIsNew = copilotResponseCount > __INITIAL_ACTION_COUNT__;
+                    const isNew = __IS_COPILOT__
+                        ? (copilotResponseIsNew || assistantIsNew)
+                        : assistantIsNew;
                     const pollResult = (status, isNewValue) => ({
                         status,
                         isNew: isNewValue,
                         stopVisible: isVisible(stopButton),
                         assistantCount: messages.length,
+                        assistantCountIsNew,
+                        assistantTextChanged,
+                        responseTextLength,
+                        responseSignature: latestSignature,
                         responseActionCount: copilotResponseCount,
+                        responseActionIsNew: copilotResponseIsNew,
                         generationSeen: Boolean(window.__ask_bridge_generation_seen)
                     });
                     
@@ -8687,15 +8981,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         return pollResult("done", true);
                     }
                     
-                    if (isNew) {
-                        return pollResult("done", isNew);
+                    if (copilotResponseIsNew) {
+                        return pollResult("done", true);
+                    }
+
+                    if (assistantIsNew) {
+                        return pollResult("candidate", true);
                     }
                     
                     return pollResult("waiting", isNew);
                 }"#
             .replace("__STOP_SELECTORS__", stop_selectors)
             .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
-            .replace("__INITIAL_COUNT__", &initial_response_count.to_string())
+            .replace(
+                "__INITIAL_ASSISTANT_COUNT__",
+                &initial_assistant_count.to_string(),
+            )
+            .replace(
+                "__INITIAL_ACTION_COUNT__",
+                &initial_response_action_count.to_string(),
+            )
+            .replace(
+                "__INITIAL_ASSISTANT_SIGNATURE__",
+                &initial_assistant_signature_json,
+            )
             .replace(
                 "__COPILOT_ACTION_SELECTOR__",
                 &copilot_action_control_selector,
@@ -8737,7 +9046,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "is_new": parsed["isNew"],
                         "stop_visible": parsed["stopVisible"],
                         "assistant_count": parsed["assistantCount"],
+                        "assistant_count_is_new": parsed["assistantCountIsNew"],
+                        "assistant_text_changed": parsed["assistantTextChanged"],
+                        "response_text_character_count": parsed["responseTextLength"],
                         "response_action_count": parsed["responseActionCount"],
+                        "response_action_is_new": parsed["responseActionIsNew"],
                         "generation_seen": parsed["generationSeen"]
                     });
                     if let Ok(signature) = serde_json::to_string(&diagnostic)
@@ -8751,12 +9064,44 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let is_new = parsed["isNew"].as_bool().unwrap_or(false);
 
                 if status == "done" && is_new {
+                    stable_candidate_checks = 0;
+                    last_candidate_signature = None;
                     stable_done_checks += 1;
                     if stable_done_checks >= 3 {
+                        completion_signal =
+                            if parsed["responseActionIsNew"].as_bool().unwrap_or(false) {
+                                "response_action"
+                            } else {
+                                "generation_finished"
+                            };
+                        finished = true;
+                    }
+                } else if status == "candidate" && is_new {
+                    stable_done_checks = 0;
+                    let signature = parsed["responseSignature"].as_str().unwrap_or_default();
+                    if !signature.is_empty()
+                        && last_candidate_signature.as_deref() == Some(signature)
+                    {
+                        stable_candidate_checks += 1;
+                    } else {
+                        stable_candidate_checks = usize::from(!signature.is_empty());
+                        last_candidate_signature = if signature.is_empty() {
+                            None
+                        } else {
+                            Some(signature.to_string())
+                        };
+                    }
+                    // Copy/Stop controls are preferable completion signals. This
+                    // fallback handles localized or redesigned controls by
+                    // requiring unchanged response text for five seconds.
+                    if stable_candidate_checks >= 10 {
+                        completion_signal = "stable_response_text";
                         finished = true;
                     }
                 } else {
                     stable_done_checks = 0;
+                    stable_candidate_checks = 0;
+                    last_candidate_signature = None;
                 }
             }
         }
@@ -8777,7 +9122,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::json!({
                     "timeout_seconds": cli.timeout,
                     "wait_cycles": wait_cycles,
-                    "stable_done_checks": stable_done_checks
+                    "stable_done_checks": stable_done_checks,
+                    "stable_candidate_checks": stable_candidate_checks
                 }),
             );
         }
@@ -8793,7 +9139,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "response_complete",
             serde_json::json!({
                 "wait_cycles": wait_cycles,
-                "stable_done_checks": stable_done_checks
+                "stable_done_checks": stable_done_checks,
+                "stable_candidate_checks": stable_candidate_checks,
+                "completion_signal": completion_signal
             }),
         );
     }

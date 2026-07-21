@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "0.3.6"
+$Version = "0.3.7"
 $AllowDowngradeRequested = $AllowDowngrade -or $env:ASK_BRIDGE_ALLOW_DOWNGRADE -eq "1"
 
 function ConvertTo-AskBridgeReleaseVersion {
@@ -191,10 +191,11 @@ function Copy-ItemWithRetry {
     $DestinationName = Split-Path -Leaf $Destination
     for ($attempt = 1; $attempt -le 10; $attempt++) {
         $StagedPath = Join-Path $DestinationDirectory (".$DestinationName.new-" + [guid]::NewGuid().ToString("N"))
+        $BackupPath = Join-Path $DestinationDirectory (".$DestinationName.backup-" + [guid]::NewGuid().ToString("N"))
         try {
             Copy-Item -LiteralPath $Source -Destination $StagedPath
             if (Test-Path -LiteralPath $Destination -PathType Leaf) {
-                [System.IO.File]::Replace($StagedPath, $Destination, $null)
+                [System.IO.File]::Replace($StagedPath, $Destination, $BackupPath)
             } else {
                 [System.IO.File]::Move($StagedPath, $Destination)
             }
@@ -212,6 +213,7 @@ function Copy-ItemWithRetry {
             Start-Sleep -Milliseconds 500
         } finally {
             Remove-Item -LiteralPath $StagedPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $BackupPath -Force -ErrorAction SilentlyContinue
         }
     }
 }
