@@ -617,7 +617,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.7")]
+#[command(version = "0.3.8")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -2080,9 +2080,13 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
 
     cmd.args(chrome_window_launch_args(headless));
 
+    // Chrome outlives this CLI process. Detach all three standard handles so a
+    // Node/MCP parent observing `close` is not kept open by Chrome inheriting
+    // the prompt's stdin pipe after ask-bridge itself has exited.
     let child = cmd
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("Failed to start Google Chrome: {}", e))?;
 

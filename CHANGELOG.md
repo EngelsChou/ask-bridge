@@ -6,6 +6,13 @@
 
 ---
 
+## [0.3.8] - 2026-07-21
+
+### Fixed
+- ask-bridge 啟動專用 Chrome 時會同時分離 stdin、stdout 與 stderr；避免 Chrome 繼承 VS Code／MCP 的 prompt stdin pipe，導致 CLI 已退出但 MCP 子程序永遠等不到 `close`、結果無法回傳。
+
+---
+
 ## [0.3.7] - 2026-07-21
 
 ### Fixed

@@ -100,6 +100,15 @@ test('keeps release versions synchronized', () => {
   }
 });
 
+test('managed Chrome detaches every inherited standard handle', () => {
+  const source = projectFile('src/main.rs');
+  assert.match(
+    source,
+    /cmd\s*\.stdin\(Stdio::null\(\)\)\s*\.stdout\(Stdio::null\(\)\)\s*\.stderr\(Stdio::null\(\)\)\s*\.spawn\(\)/s,
+    'Chrome must not inherit the MCP prompt stdin pipe or output handles',
+  );
+});
+
 test('installation and updater entry points never fall back to main', () => {
   const branch = 'main-add-m365-copilot';
   const files = [
