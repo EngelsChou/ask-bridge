@@ -8,7 +8,7 @@
 - Shell 可使用 Node.js 與 `npx`。
 - 若希望 `make install` 在缺少 Google Chrome 時自動安裝 Chrome，需先安裝 Homebrew。
 
-不需要安裝全域 `mcp-cli` 執行檔。本專案會透過 Cargo 從 `https://github.com/doggy8088/mcp-cli` 使用 `mcp-cli` 作為 Rust dependency。
+不需要安裝全域 `mcp-cli` 執行檔。本專案會透過 Cargo 從 `https://github.com/EngelsChou/mcp-cli` 使用 `mcp-cli` 作為 Rust dependency。
 
 ## 安裝
 
@@ -215,7 +215,7 @@ ask-bridge close
 }
 ```
 
-Rust binary 會透過內建的 `doggy8088/mcp-cli` library dependency 呼叫 Chrome DevTools MCP，不會 shell out 到系統上的 `mcp-cli` 命令。
+Rust binary 會透過內建的 `EngelsChou/mcp-cli` library dependency 呼叫 Chrome DevTools MCP，不會 shell out 到系統上的 `mcp-cli` 命令。
 
 ## 疑難排解
 
