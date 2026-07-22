@@ -1,6 +1,6 @@
 # Ask Bridge 🦀
 
-`ask-bridge` is a powerful, lightweight command-line tool written in **Rust** that automates ChatGPT, Gemini, Claude or Microsoft 365 Copilot directly in your real Chrome browser. It uses the **Model Context Protocol (MCP)** and **Chrome DevTools Protocol (CDP)** via the embedded `doggy8088/mcp-cli` Rust library dependency and `chrome-devtools-mcp` to control Chrome, input prompts, click submit, and print the response back to your terminal. ChatGPT is the default when no global provider is configured; use `--provider gemini`, `--provider claude`, `--provider copilot`, or the global config file to switch providers.
+`ask-bridge` is a powerful, lightweight command-line tool written in **Rust** that automates ChatGPT, Gemini, Claude or Microsoft 365 Copilot directly in your real Chrome browser. It uses the **Model Context Protocol (MCP)** and **Chrome DevTools Protocol (CDP)** via the embedded `EngelsChou/mcp-cli` Rust library dependency and `chrome-devtools-mcp` to control Chrome, input prompts, click submit, and print the response back to your terminal. ChatGPT is the default when no global provider is configured; use `--provider gemini`, `--provider claude`, `--provider copilot`, or the global config file to switch providers.
 
 ## Design Intent
 
@@ -65,7 +65,7 @@ npx -v
 | Windows | Install a Node.js LTS release with the official installer, winget, or nvm-windows. Reopen PowerShell after installation, then verify that `node -v` and `npx -v` work. Chrome is detected from the standard `Program Files`, `Program Files (x86)`, and `%LOCALAPPDATA%` install paths. |
 | Linux | Distribution package repositories may provide an older Node.js version. Prefer NodeSource, nvm, or an official Node.js LTS source. Install Google Chrome Stable and make sure `google-chrome` or `google-chrome-stable` is available in `PATH`; Snap, Flatpak, or Chromium installs may not match the default detection logic. |
 
-You do **not** need a global `mcp-cli` executable. The Rust binary uses `mcp-cli` as a Cargo dependency from `https://github.com/doggy8088/mcp-cli`.
+You do **not** need a global `mcp-cli` executable. The Rust binary uses `mcp-cli` as a Cargo dependency from `https://github.com/EngelsChou/mcp-cli`.
 
 ---
 
@@ -390,7 +390,7 @@ ask-bridge close
 
 1. **Browser Initialization**: `ask-bridge` checks if Chrome is listening on debugging port `9223`. If not, it spawns Google Chrome as a background process with a custom profile directory (`~/.config/ask-bridge/chrome-profile`).
 2. **MCP Bridge Config**: On startup, it automatically writes a custom `mcp_servers.json` to `~/.config/ask-bridge/mcp_servers.json`, configuring the Chrome DevTools MCP server by default with the pinned `chrome-devtools-mcp@1.5.0` and `--browser-url=http://127.0.0.1:9223`.
-3. **Client Call**: `ask-bridge` calls the embedded `doggy8088/mcp-cli` Rust library dependency, invoking `list_pages`, `select_page`, `type_text`, and `evaluate_script` tools to automate the DOM without relying on an external `mcp-cli` executable.
+3. **Client Call**: `ask-bridge` calls the embedded `EngelsChou/mcp-cli` Rust library dependency, invoking `list_pages`, `select_page`, `type_text`, and `evaluate_script` tools to automate the DOM without relying on an external `mcp-cli` executable.
 4. **State Polling**: During generation, a lightweight JavaScript engine checks the provider's send/stop button states and extracts response element inner-text for terminal output.
 
 ---

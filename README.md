@@ -1,6 +1,6 @@
 # Ask Bridge 🦀
 
-`ask-bridge` 是以 Rust 撰寫的輕量命令列工具，可透過真實 Chrome 瀏覽器自動操作 ChatGPT、Gemini、Claude 與 Microsoft 365 Copilot。它使用 Model Context Protocol MCP 與 Chrome DevTools Protocol CDP，並透過內建的 `doggy8088/mcp-cli` Rust library dependency 搭配 `chrome-devtools-mcp` 控制 Chrome、輸入 prompt、送出訊息，並將回覆輸出到終端機。未設定全域 provider 時預設使用 ChatGPT，可用 `--provider gemini`、`--provider claude`、`--provider copilot` 或全域設定檔切換 provider。
+`ask-bridge` 是以 Rust 撰寫的輕量命令列工具，可透過真實 Chrome 瀏覽器自動操作 ChatGPT、Gemini、Claude 與 Microsoft 365 Copilot。它使用 Model Context Protocol MCP 與 Chrome DevTools Protocol CDP，並透過內建的 `EngelsChou/mcp-cli` Rust library dependency 搭配 `chrome-devtools-mcp` 控制 Chrome、輸入 prompt、送出訊息，並將回覆輸出到終端機。未設定全域 provider 時預設使用 ChatGPT，可用 `--provider gemini`、`--provider claude`、`--provider copilot` 或全域設定檔切換 provider。
 
 ## 設計意圖
 
@@ -62,7 +62,7 @@ npx -v
 | Windows | 可使用 Node.js 官方安裝程式、winget 或 nvm-windows 安裝 Node.js LTS。安裝後請重新開啟 PowerShell，並確認 `node -v` 與 `npx -v` 可執行。Chrome 會優先偵測 `Program Files`、`Program Files (x86)` 與 `%LOCALAPPDATA%` 底下的標準安裝路徑。 |
 | Linux | 許多發行版內建套件庫可能提供較舊的 Node.js；建議使用 NodeSource、nvm 或官方 Node.js LTS 來源安裝。請安裝 Google Chrome Stable，並確認 `google-chrome` 或 `google-chrome-stable` 位於 `PATH` 中；Snap、Flatpak 或 Chromium 安裝方式可能不符合預設偵測邏輯。 |
 
-不需要安裝全域 `mcp-cli` 執行檔。Rust binary 會透過 Cargo 從 `https://github.com/doggy8088/mcp-cli` 使用 `mcp-cli` 作為 dependency。
+不需要安裝全域 `mcp-cli` 執行檔。Rust binary 會透過 Cargo 從 `https://github.com/EngelsChou/mcp-cli` 使用 `mcp-cli` 作為 dependency。
 
 ## 安裝與建置
 
@@ -434,7 +434,7 @@ v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream 
 
 1. **瀏覽器初始化**：`ask-bridge` 會檢查 Chrome 是否正在監聽 debug port `9223`。若沒有，會以專屬 profile 目錄 `~/.config/ask-bridge/chrome-profile` 啟動 Google Chrome。
 2. **MCP Bridge 設定**：啟動時會自動寫入 `~/.config/ask-bridge/mcp_servers.json`，預設設定 Chrome DevTools MCP server，使用版本固定的 `chrome-devtools-mcp@1.5.0` 與 `--browser-url=http://127.0.0.1:9223`。
-3. **Client 呼叫**：`ask-bridge` 透過內建的 `doggy8088/mcp-cli` Rust library dependency 呼叫 MCP tools，例如 `list_pages`、`select_page`、`type_text` 與 `evaluate_script`，不依賴系統上的外部 `mcp-cli` 命令。
+3. **Client 呼叫**：`ask-bridge` 透過內建的 `EngelsChou/mcp-cli` Rust library dependency 呼叫 MCP tools，例如 `list_pages`、`select_page`、`type_text` 與 `evaluate_script`，不依賴系統上的外部 `mcp-cli` 命令。
 4. **狀態輪詢**：provider 產生回覆期間，工具會以 JavaScript 檢查送出與停止按鈕狀態，擷取回覆元素的文字內容，並輸出到 `stdout`。
 
 ## 相關文件

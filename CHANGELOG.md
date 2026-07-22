@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+### Changed
+- Moved the embedded `mcp-cli` Cargo dependency to the `EngelsChou/mcp-cli` fork and pinned the verified commit.
+
 ---
 
 ## [0.3.9] - 2026-07-22
