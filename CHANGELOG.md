@@ -4,8 +4,12 @@
 
 ## [Unreleased]
 
+---
+
+## [0.3.10] - 2026-07-22
+
 ### Changed
-- Moved the embedded `mcp-cli` Cargo dependency to the `EngelsChou/mcp-cli` fork and pinned the verified commit.
+- 將內嵌的 `mcp-cli` Cargo dependency 改為 `EngelsChou/mcp-cli` fork，並固定至已驗證的 commit；建置與鎖檔不再連線至原始 upstream repository。
 
 ---
 
