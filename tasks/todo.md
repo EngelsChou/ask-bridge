@@ -236,7 +236,7 @@
 ## Dependencies & Environment
 - Cargo and npm available locally.
 - `G:` has insufficient free space for Cargo target output; use `%TEMP%` / `/mnt/c/...` target directories for heavy Cargo commands.
-- Git remote is `origin https://github.com/doggy8088/ask-bridge.git`.
+- Git remote is `origin https://github.com/EngelsChou/ask-bridge.git`.
 
 ## Working Notes
 - Patch bump is appropriate because the preceding change is a bug fix without breaking API/CLI behavior.
@@ -342,7 +342,7 @@ pm test。
 - Monitoring signals: Agent 不得在對應 release commit 的 CI 顯示 `completed/success` 前推送 `vX.Y.Z` Tag。
 
 ## Dependencies & Environment
-- `gh` 必須已登入並能讀取 `doggy8088/ask-bridge` 的 Actions runs。
+- `gh` 必須已登入並能讀取 `EngelsChou/ask-bridge` 的 Actions runs。
 - `.github/workflows/ci.yml` 必須維持 `main` push 觸發；正式發布仍由 `v*.*.*` Tag 觸發 `.github/workflows/release.yml`。
 
 ## Working Notes
