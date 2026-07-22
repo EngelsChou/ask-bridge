@@ -38,7 +38,7 @@ Unlike typical API clients, `ask-bridge` operates inside a real Chrome browser w
 - **🧠 Intelligent Tab Management**: Reuses existing provider tabs if open, focuses them, or opens new ones, avoiding tab clutter.
 - **🖥️ Pipe & Stdin Support**: Supports piping prompts via `stdin` (e.g. `cat report.txt | ask-bridge "summarize this"`).
 - **📎 Image & File Attachments**: Attach local images with `--image` (supported on ChatGPT, Claude, and Microsoft 365 Copilot), or documents (PDF, Word, Excel, plain text, Markdown, JSON, source code, etc.) with `--file`; Gemini currently supports `--file` and rejects `--image`.
-- **🔀 Model Switching**: Use `--model` to switch the provider model before the prompt is sent, such as ChatGPT `GPT-5.4`, Gemini `3.5 Flash`, or Claude `Sonnet`.
+- **🔀 Model Switching**: Use `--model` to switch the provider model before the prompt is sent, such as ChatGPT `GPT-5.4`, Gemini `3.5 Flash`, Claude `Sonnet`, or Microsoft 365 Copilot `Think deeper`.
 - **Response Timeout**: Use `--timeout <seconds>` to control how long to wait for a provider response, defaulting to `300` seconds.
 - **🔍 Quiet by Default & Verbose Mode**: Quiet and clean output by default (displaying only the generated response), with an optional `--verbose` flag to display full browser state logs if needed.
 - **Version Info**: Use `-v` or `--version` to print the current version number.
@@ -348,6 +348,9 @@ ask-bridge --provider gemini "Introduce Rust in a few sentences." --model "3.5 F
 ask-bridge --provider gemini "Introduce Rust in a few sentences." --model "3.1 Pro"
 ask-bridge --provider claude "Introduce Rust in a few sentences." --model Sonnet
 ask-bridge --provider claude "Prove this math problem." --model Opus
+ask-bridge --provider copilot "Summarize the key points quickly." --model "Quick response"
+ask-bridge --provider copilot "Analyze the architecture risks carefully." --model "Think deeper"
+ask-bridge --provider copilot "Analyze this document." --model "GPT-5.2"
 ```
 
 Available model names (depending on your account entitlements and provider UI):
@@ -356,6 +359,7 @@ Available model names (depending on your account entitlements and provider UI):
 - **ChatGPT thinking levels**: `智慧`, `即時`, `中等`, `高`, `超高`, `專業`
 - **Gemini modes**: `3.5 Flash`, `3.1 Flash-Lite`, `3.1 Pro`
 - **Claude models**: `Sonnet`, `Opus`, `Haiku` (actual names depend on the claude.ai menu and your plan)
+- **Microsoft 365 Copilot modes/models**: `Auto`, `Quick response`, `Think deeper`, and models currently visible under `More` (for example `GPT-5.2` or `Claude`). Microsoft updates these options dynamically; availability depends on the tenant, license, and admin policy.
 
 > If the requested name is not found in the menu, `ask-bridge` reports `Model switch failed: error: model not found in menu` and aborts without submitting the prompt.
 

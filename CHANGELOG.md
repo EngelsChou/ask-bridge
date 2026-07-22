@@ -6,6 +6,20 @@
 
 ---
 
+## [0.3.9] - 2026-07-22
+
+### Added
+- Microsoft 365 Copilot 現在支援 `--model`，可選 `Auto`、`Quick response`、`Think deeper`，以及租戶當下在 `More` 選單中可見的具體模型；找不到指定選項時會在送出 prompt 前停止。
+
+### Fixed
+- 修正 Microsoft 365 Copilot 富文字輸入框把 `Shift+Enter` 產生的 DOM 空白行重複計入 `innerText`，導致完整的第二次或多行問題被送出前安全校驗誤判而停留在文字框；現在仍要求所有非空行文字與順序一致，只忽略編輯器額外產生的空白行。
+
+### Verified
+- 補上空白行正規化回歸測試，並確認內容變更或重複文字仍會被拒絕。
+- Chrome 仍固定重用 `%USERPROFILE%\.config\ask-bridge\chrome-profile`；VS Code 與 terminal 啟動的 ask-bridge 共用同一登入狀態，安裝與一般升級不會刪除此 profile。
+
+---
+
 ## [0.3.8] - 2026-07-21
 
 ### Fixed

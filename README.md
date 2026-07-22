@@ -37,7 +37,7 @@
 - **智慧分頁管理**：可重用既有 provider 分頁、聚焦分頁，或開啟新分頁，避免分頁過度增加。
 - **Pipe 與 stdin 支援**：支援透過 standard input 傳入 prompt，例如 `cat report.txt | ask-bridge "summarize this"`。
 - **圖片與文件上傳**：可透過 `--image` 附上圖片（支援 ChatGPT、Claude 與 Microsoft 365 Copilot），或透過 `--file` 附上文件（PDF、Word、Excel、純文字、Markdown、JSON、程式碼等），一次可指定多個檔案；Gemini 目前支援 `--file`，不支援 `--image` 圖片輸入。
-- **模型切換**：使用 `--model` 在送出 prompt 前自動切換 provider 模型（如 ChatGPT 的 `GPT-5.4`、`o3`，Gemini 的 `3.5 Flash`、`3.1 Pro`，或 Claude 的 `Sonnet`、`Opus`）。
+- **模型切換**：使用 `--model` 在送出 prompt 前自動切換 provider 模型（如 ChatGPT 的 `GPT-5.4`、Gemini 的 `3.5 Flash`、Claude 的 `Sonnet`，或 Microsoft 365 Copilot 的 `Think deeper`）。
 - **回應超時**：使用 `--timeout <秒數>` 設定等待回應上限，預設為 `300` 秒。
 - **預設安靜模式與 verbose 模式**：預設只輸出最終回覆；加上 `--verbose` 可顯示背景瀏覽器控制流程。
 - **版本資訊**：使用 `-v` 或 `--version` 顯示目前版本號。
@@ -85,7 +85,7 @@ Start-Process "https://github.com/EngelsChou/ask-bridge/releases/latest"
 請從最新版 Release 下載同一版本的 `install.exe` 與 `uninstall.exe`。若檔案具有數位簽章，可在「內容 → 數位簽章」確認簽署者；Release 未設定 Authenticode 憑證時仍會發布未簽章的 Windows 安裝檔，Windows 可能顯示「不明的發行者」。安裝是使用者層級，不需要系統管理員權限。
 
 > [!IMPORTANT]
-> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.8 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
+> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.9 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
 
 既有 v0.3.0 或更舊的 macOS/Linux 安裝沒有雜湊綁定的版本紀錄，第一次遷移必須明確允許取代：
 
@@ -382,6 +382,9 @@ ask-bridge --provider gemini "用幾句話介紹 Rust。" --model "3.5 Flash"
 ask-bridge --provider gemini "用幾句話介紹 Rust。" --model "3.1 Pro"
 ask-bridge --provider claude "用幾句話介紹 Rust。" --model Sonnet
 ask-bridge --provider claude "證明這個數學問題。" --model Opus
+ask-bridge --provider copilot "快速整理重點。" --model "Quick response"
+ask-bridge --provider copilot "仔細分析架構風險。" --model "Think deeper"
+ask-bridge --provider copilot "分析這份文件。" --model "GPT-5.2"
 ```
 
 可用的模型名稱（視帳號權限與 provider UI 而定）：
@@ -390,6 +393,7 @@ ask-bridge --provider claude "證明這個數學問題。" --model Opus
 - **ChatGPT 思考強度**：`智慧`、`即時`、`中等`、`高`、`超高`、`專業`
 - **Gemini 模式**：`3.5 Flash`、`3.1 Flash-Lite`、`3.1 Pro`
 - **Claude 模型**：`Sonnet`、`Opus`、`Haiku`（實際名稱依 claude.ai 選單與帳號方案而定）
+- **Microsoft 365 Copilot 模式／模型**：`Auto`、`Quick response`、`Think deeper`，以及 `More` 選單中租戶當下可見的模型（例如 `GPT-5.2` 或 `Claude`）。選項會由 Microsoft 動態更新，實際可用範圍依租戶、授權與管理原則而定。
 
 > 若指定的名稱在選單中找不到，`ask-bridge` 會回報 `Model switch failed: error: model not found in menu` 並中止，不會送出 prompt。
 
@@ -424,7 +428,7 @@ ask-bridge update
 
 具有內嵌受信任簽章指紋的 Windows build 會下載最新版 Release 的 `install.exe`，驗證有效的 Engels Chou Authenticode 簽章、固定憑證指紋及版本下限後才執行；未簽章 Windows build 會安全拒絕自動更新，請改從 Release 手動下載。macOS/Linux 會執行固定在 `main-add-m365-copilot` 的安裝腳本並傳入目前版本下限。
 
-v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.8 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
+v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.9 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
 
 ## 運作原理
 
