@@ -617,7 +617,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.8")]
+#[command(version = "0.3.9")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -2933,10 +2933,6 @@ fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<()
         );
     }
 
-    if provider == Provider::Copilot && cli.model.is_some() {
-        return Err("Microsoft 365 Copilot model switching is not supported yet.".to_string());
-    }
-
     Ok(())
 }
 
@@ -3446,6 +3442,28 @@ mod tests {
     }
 
     #[test]
+    fn copilot_composer_verification_accepts_editor_generated_blank_lines() {
+        let expected = "第一行\n\n第三行\n- 項目一\n- 項目二";
+        let actual = "第一行\n\n\n第三行\n\n- 項目一\n\u{00a0}\n- 項目二\n";
+
+        assert!(copilot_composer_content_matches(expected, actual));
+    }
+
+    #[test]
+    fn copilot_composer_verification_still_rejects_changed_or_duplicated_text() {
+        let expected = "第一行\n第二行";
+
+        assert!(!copilot_composer_content_matches(
+            expected,
+            "第一行\n已變更"
+        ));
+        assert!(!copilot_composer_content_matches(
+            expected,
+            "第一行\n第二行\n第二行"
+        ));
+    }
+
+    #[test]
     fn copilot_blocked_page_reports_missing_entitlement_without_claiming_prompt_submission() {
         let error = copilot_blocked_page_error("https://m365.cloud.microsoft/chat/blocked")
             .expect("blocked Copilot URL should be actionable");
@@ -3546,17 +3564,33 @@ mod tests {
     }
 
     #[test]
-    fn rejects_copilot_model_switching() {
+    fn allows_copilot_model_switching() {
         let cli = Cli::try_parse_from([
             "ask-bridge",
             "--provider",
             "copilot",
             "hello",
             "--model",
-            "work",
+            "Think deeper",
         ])
         .unwrap();
-        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_err());
+        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_ok());
+    }
+
+    #[test]
+    fn copilot_model_switcher_supports_stable_modes_and_dynamic_model_names() {
+        let script = build_copilot_switch_model_js("\"Think deeper\"");
+        for expected in [
+            "quickresponse",
+            "thinkdeeper",
+            "自動",
+            "更多",
+            "model not found in menu",
+        ] {
+            assert!(script.contains(expected), "missing {expected:?}");
+        }
+        assert!(script.contains("const target = canonical(\"Think deeper\")"));
+        assert!(script.contains("/^(?:gpt|claude)/"));
     }
 
     #[test]
@@ -6534,6 +6568,123 @@ fn upload_attachments_to_provider(
     Ok(AttachmentReceipt::default())
 }
 
+fn build_copilot_switch_model_js(target_json: &str) -> String {
+    let template = r#"() => {
+        window.__switch_model_status = 'pending';
+        (async () => {
+            try {
+                const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+                const norm = (value) => (value || '').normalize('NFKC').toLowerCase()
+                    .replace(/[^\p{Letter}\p{Number}]+/gu, '');
+                const canonical = (value) => {
+                    const normalized = norm(value);
+                    const aliases = new Map([
+                        ['auto', 'auto'], ['automatic', 'auto'], ['自動', 'auto'], ['自动', 'auto'],
+                        ['quick', 'quickresponse'], ['quickresponse', 'quickresponse'],
+                        ['快速回應', 'quickresponse'], ['快速回覆', 'quickresponse'],
+                        ['快速响应', 'quickresponse'], ['快速回复', 'quickresponse'],
+                        ['thinkdeeper', 'thinkdeeper'], ['深入思考', 'thinkdeeper'],
+                        ['深度思考', 'thinkdeeper'], ['更深入思考', 'thinkdeeper'],
+                        ['more', 'more'], ['更多', 'more']
+                    ]);
+                    return aliases.get(normalized) || normalized;
+                };
+                const target = canonical(__TARGET_MODEL__);
+                if (!target) {
+                    window.__switch_model_status = 'error: empty target';
+                    return;
+                }
+                const visible = (element) => {
+                    if (!(element instanceof HTMLElement)) return false;
+                    const style = getComputedStyle(element);
+                    const rect = element.getBoundingClientRect();
+                    return style.visibility !== 'hidden' && style.display !== 'none' &&
+                        rect.width > 0 && rect.height > 0;
+                };
+                const labelsOf = (element) => {
+                    const text = (element.innerText || element.textContent || '').trim();
+                    const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || '';
+                    return [
+                        firstLine,
+                        element.getAttribute('aria-label') || '',
+                        element.getAttribute('title') || '',
+                        element.getAttribute('data-testid') || ''
+                    ].filter(Boolean);
+                };
+                const matches = (element, wanted) => labelsOf(element).some((label) => {
+                    const candidate = canonical(label);
+                    if (candidate === wanted) return true;
+                    return /^(?:gpt|claude)/.test(wanted) && candidate.startsWith(wanted);
+                });
+                const click = (element) => {
+                    element.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+                    element.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+                    element.click();
+                };
+
+                document.dispatchEvent(new KeyboardEvent('keydown', {
+                    key: 'Escape', keyCode: 27, bubbles: true
+                }));
+                await sleep(250);
+
+                const triggerPattern = /model selector|model picker|mode selector|response mode|模型選擇|型號選擇|模式選擇|回應模式|响应模式|auto|quick response|think deeper|自動|自动|快速回應|快速回覆|快速响应|快速回复|深入思考|深度思考/i;
+                const triggers = Array.from(document.querySelectorAll('button, [role="button"]'))
+                    .filter(visible)
+                    .filter((element) => triggerPattern.test(labelsOf(element).join(' ')))
+                    .sort((left, right) => {
+                        const score = (element) => {
+                            const rect = element.getBoundingClientRect();
+                            const popup = /menu|listbox|dialog/.test(element.getAttribute('aria-haspopup') || '') ? 1000 : 0;
+                            const explicit = /model|mode|模型|型號|模式/.test(labelsOf(element).join(' ').toLowerCase()) ? 500 : 0;
+                            return popup + explicit - rect.top + rect.left / 10000;
+                        };
+                        return score(right) - score(left);
+                    });
+                const trigger = triggers[0];
+                if (!trigger) {
+                    window.__switch_model_status = 'error: Copilot model selector not found';
+                    return;
+                }
+                if (matches(trigger, target)) {
+                    window.__switch_model_status = 'success:' + labelsOf(trigger)[0];
+                    return;
+                }
+                click(trigger);
+                await sleep(800);
+
+                const findChoice = (wanted) => Array.from(document.querySelectorAll(
+                    '[role="menuitem"], [role="menuitemradio"], [role="option"], [role="radio"], [role="menu"] button, [role="listbox"] button, [role="dialog"] button'
+                )).filter(visible).find((element) => matches(element, wanted));
+
+                let choice = findChoice(target);
+                if (!choice) {
+                    const more = findChoice('more');
+                    if (more) {
+                        click(more);
+                        await sleep(800);
+                        choice = findChoice(target);
+                    }
+                }
+                if (!choice) {
+                    document.dispatchEvent(new KeyboardEvent('keydown', {
+                        key: 'Escape', keyCode: 27, bubbles: true
+                    }));
+                    window.__switch_model_status = 'error: model not found in menu';
+                    return;
+                }
+                const chosen = labelsOf(choice)[0] || __TARGET_MODEL__;
+                click(choice);
+                await sleep(500);
+                window.__switch_model_status = 'success:' + chosen;
+            } catch (error) {
+                window.__switch_model_status = 'error: ' + error.message;
+            }
+        })();
+        return true;
+    }"#;
+    template.replace("__TARGET_MODEL__", target_json)
+}
+
 /// Switch the selected provider to the specified model. The page must already be
 /// loaded and logged in. `model` is matched case- and punctuation-insensitively.
 fn switch_model(
@@ -6542,10 +6693,6 @@ fn switch_model(
     model: &str,
     verbose: bool,
 ) -> Result<(), String> {
-    if provider == Provider::Copilot {
-        return Err("Microsoft 365 Copilot model switching is not supported yet.".to_string());
-    }
-
     if model.trim().is_empty() {
         return Err("Empty model name".to_string());
     }
@@ -6742,7 +6889,7 @@ fn switch_model(
             }"#;
             template.replace("__TARGET_MODEL__", &target_json)
         }
-        Provider::Copilot => unreachable!("Copilot model switching is rejected above"),
+        Provider::Copilot => build_copilot_switch_model_js(&target_json),
     };
 
     let start_res = call_mcp_tool(
@@ -7442,12 +7589,33 @@ fn type_copilot_prompt(config_path: &str, prompt: &str) -> Result<(), String> {
     verify_copilot_composer_prompt(config_path, prompt)
 }
 
+fn normalize_copilot_composer_text(value: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace(['\u{200b}', '\u{200c}', '\u{200d}', '\u{feff}'], "")
+        .replace('\u{00a0}', " ")
+}
+
+fn collapse_copilot_editor_blank_lines(value: &str) -> String {
+    normalize_copilot_composer_text(value)
+        .split('\n')
+        .filter(|line| !line.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn copilot_composer_content_matches(expected: &str, actual: &str) -> bool {
+    let expected = normalize_copilot_composer_text(expected);
+    let actual = normalize_copilot_composer_text(actual);
+    expected == actual
+        || collapse_copilot_editor_blank_lines(&expected)
+            == collapse_copilot_editor_blank_lines(&actual)
+}
+
 fn verify_copilot_composer_prompt(config_path: &str, prompt: &str) -> Result<(), String> {
-    let expected_json = serde_json::to_string(prompt)
-        .map_err(|e| format!("Failed to serialize expected Copilot prompt: {}", e))?;
     let js = r#"() => {
             const composerSelectors = __COMPOSER_SELECTORS__;
-            const expected = __EXPECTED_PROMPT__;
             const isVisible = (el) => {
                 if (!el) return false;
                 const style = window.getComputedStyle(el);
@@ -7466,20 +7634,17 @@ fn verify_copilot_composer_prompt(config_path: &str, prompt: &str) -> Result<(),
             const actual = normalize(typeof composer.value !== 'undefined'
                 ? composer.value
                 : (composer.innerText || composer.textContent || ''));
-            const wanted = normalize(expected);
             return {
-                ok: actual === wanted,
+                ok: true,
+                actual,
                 actualLength: Array.from(actual).length,
-                expectedLength: Array.from(wanted).length,
-                actualLineBreaks: (actual.match(/\n/g) || []).length,
-                expectedLineBreaks: (wanted.match(/\n/g) || []).length
+                actualLineBreaks: (actual.match(/\n/g) || []).length
             };
         }"#
     .replace(
         "__COMPOSER_SELECTORS__",
         Provider::Copilot.composer_selectors_json(),
-    )
-    .replace("__EXPECTED_PROMPT__", &expected_json);
+    );
 
     let result = call_mcp_tool(
         config_path,
@@ -7487,18 +7652,27 @@ fn verify_copilot_composer_prompt(config_path: &str, prompt: &str) -> Result<(),
         serde_json::json!({ "function": js }),
     )?;
     let parsed = parse_script_result(&result)?;
-    let ok = parsed
-        .get("ok")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
+    let actual = parsed
+        .get("actual")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let expected = normalize_copilot_composer_text(prompt);
+    let ok = copilot_composer_content_matches(&expected, actual);
+    let expected_character_count = expected.chars().count();
+    let expected_line_break_count = expected.matches('\n').count();
+    let actual_character_count = normalize_copilot_composer_text(actual).chars().count();
+    let actual_line_break_count = normalize_copilot_composer_text(actual)
+        .matches('\n')
+        .count();
     append_copilot_diagnostic(
         "prompt_composer_verified",
         serde_json::json!({
             "verified": ok,
-            "actual_character_count": parsed["actualLength"],
-            "expected_character_count": parsed["expectedLength"],
-            "actual_line_break_count": parsed["actualLineBreaks"],
-            "expected_line_break_count": parsed["expectedLineBreaks"]
+            "exact_match": expected == normalize_copilot_composer_text(actual),
+            "actual_character_count": actual_character_count,
+            "expected_character_count": expected_character_count,
+            "actual_line_break_count": actual_line_break_count,
+            "expected_line_break_count": expected_line_break_count
         }),
     );
 
@@ -7507,10 +7681,10 @@ fn verify_copilot_composer_prompt(config_path: &str, prompt: &str) -> Result<(),
     } else {
         Err(format!(
             "Copilot composer content did not match the complete prompt (expected {} characters / {} line breaks, found {} / {})",
-            parsed["expectedLength"].as_u64().unwrap_or(0),
-            parsed["expectedLineBreaks"].as_u64().unwrap_or(0),
-            parsed["actualLength"].as_u64().unwrap_or(0),
-            parsed["actualLineBreaks"].as_u64().unwrap_or(0)
+            expected_character_count,
+            expected_line_break_count,
+            actual_character_count,
+            actual_line_break_count
         ))
     }
 }
