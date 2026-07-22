@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Exit on error, undefined variables, and pipe failures
+# Exit on errors, undefined variables, and pipe failures
 set -euo pipefail
 
 VERSION="0.3.9"
@@ -66,7 +66,6 @@ shift $((OPTIND-1))
 if [ -z "$PROMPT" ] && [ $# -gt 0 ]; then
   PROMPT="$*"
 fi
-
 # Validate provider
 if [ "$PROVIDER" != "chatgpt" ] && [ "$PROVIDER" != "gemini" ]; then
   echo "Error: Invalid provider '$PROVIDER'." >&2
