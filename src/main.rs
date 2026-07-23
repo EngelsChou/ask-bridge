@@ -617,7 +617,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.10")]
+#[command(version = "0.3.11")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -3579,17 +3579,19 @@ mod tests {
 
     #[test]
     fn copilot_model_switcher_supports_stable_modes_and_dynamic_model_names() {
-        let script = build_copilot_switch_model_js("\"Think deeper\"");
+        let script = build_copilot_switch_model_js("\"GPT 5.5 Think deeper\"");
         for expected in [
             "quickresponse",
             "thinkdeeper",
             "自動",
             "更多",
+            "submenuKeys",
+            "target.startsWith(label)",
             "model not found in menu",
         ] {
             assert!(script.contains(expected), "missing {expected:?}");
         }
-        assert!(script.contains("const target = canonical(\"Think deeper\")"));
+        assert!(script.contains("const target = canonical(\"GPT 5.5 Think deeper\")"));
         assert!(script.contains("/^(?:gpt|claude)/"));
     }
 
@@ -6652,15 +6654,25 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                 click(trigger);
                 await sleep(800);
 
-                const findChoice = (wanted) => Array.from(document.querySelectorAll(
+                const menuItems = () => Array.from(document.querySelectorAll(
                     '[role="menuitem"], [role="menuitemradio"], [role="option"], [role="radio"], [role="menu"] button, [role="listbox"] button, [role="dialog"] button'
-                )).filter(visible).find((element) => matches(element, wanted));
+                )).filter(visible);
+                const findChoice = (wanted) => menuItems().find((element) => matches(element, wanted));
 
                 let choice = findChoice(target);
                 if (!choice) {
-                    const more = findChoice('more');
-                    if (more) {
-                        click(more);
+                    // Current M365 Chat nests concrete choices such as
+                    // "GPT 5.5 Think deeper" under a top-level "GPT" item.
+                    // Older tenants expose the same area as "More".
+                    const brand = (target.match(/^(?:gpt|claude)/) || [])[0] || '';
+                    const submenuKeys = [brand, 'more'].filter(Boolean);
+                    const submenu = menuItems().find((element) => labelsOf(element).some((value) => {
+                        const label = canonical(value);
+                        return submenuKeys.includes(label) ||
+                            (brand && label.startsWith(brand) && target.startsWith(label) && label.length < target.length);
+                    }));
+                    if (submenu) {
+                        click(submenu);
                         await sleep(800);
                         choice = findChoice(target);
                     }

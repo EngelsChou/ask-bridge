@@ -351,6 +351,8 @@ ask-bridge --provider claude "Prove this math problem." --model Opus
 ask-bridge --provider copilot "Summarize the key points quickly." --model "Quick response"
 ask-bridge --provider copilot "Analyze the architecture risks carefully." --model "Think deeper"
 ask-bridge --provider copilot "Analyze this document." --model "GPT-5.2"
+ask-bridge --provider copilot "Analyze this carefully." --model "GPT 5.5 Think deeper"
+ask-bridge --provider copilot "Summarize this quickly." --model "GPT 5.5 快速回應"
 ```
 
 Available model names (depending on your account entitlements and provider UI):
@@ -359,7 +361,7 @@ Available model names (depending on your account entitlements and provider UI):
 - **ChatGPT thinking levels**: `智慧`, `即時`, `中等`, `高`, `超高`, `專業`
 - **Gemini modes**: `3.5 Flash`, `3.1 Flash-Lite`, `3.1 Pro`
 - **Claude models**: `Sonnet`, `Opus`, `Haiku` (actual names depend on the claude.ai menu and your plan)
-- **Microsoft 365 Copilot modes/models**: `Auto`, `Quick response`, `Think deeper`, and models currently visible under `More` (for example `GPT-5.2` or `Claude`). Microsoft updates these options dynamically; availability depends on the tenant, license, and admin policy.
+- **Microsoft 365 Copilot modes/models**: `Auto`, `Quick response`, `Think deeper`, and tenant-visible choices under the GPT/More submenus (for example `GPT 5.5 Think deeper`, `GPT 5.5 快速回應`, or `Claude`). Microsoft updates these options dynamically; availability depends on the tenant, license, and admin policy.
 
 > If the requested name is not found in the menu, `ask-bridge` reports `Model switch failed: error: model not found in menu` and aborts without submitting the prompt.
 
