@@ -617,7 +617,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.11")]
+#[command(version = "0.3.12")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -701,6 +701,8 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
+    /// Open Microsoft 365 Copilot and wait until "Return VS Code" is clicked
+    Listen,
     /// Open Chrome browser and wait for manual login
     Login,
     /// Close the managed Chrome browser instance
@@ -2926,6 +2928,21 @@ fn render_markdown(markdown: &str, use_glow: bool) -> Result<(), String> {
 }
 
 fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<(), String> {
+    if matches!(cli.command, Some(Commands::Listen)) {
+        if provider != Provider::Copilot {
+            return Err(
+                "The listen command is available only for Microsoft 365 Copilot. Use --provider copilot."
+                    .to_string(),
+            );
+        }
+        if !cli.images.is_empty() || !cli.files.is_empty() || cli.model.is_some() {
+            return Err(
+                "The listen command does not accept --image, --file, or --model. Add files and choose the model directly in the visible Microsoft 365 Copilot page."
+                    .to_string(),
+            );
+        }
+    }
+
     if provider == Provider::Gemini && !cli.images.is_empty() {
         return Err(
             "Gemini image attachments are not supported yet. Use --file for Gemini document attachments."
@@ -3298,8 +3315,56 @@ mod tests {
         assert!(!help.contains("\n  dump"));
         assert!(!help.contains("\n  screenshot"));
         assert!(help.contains("\n  login"));
+        assert!(help.contains("\n  listen"));
         assert!(help.contains("\n  close"));
         assert!(help.contains("\n  update"));
+    }
+
+    #[test]
+    fn parses_interactive_copilot_listener_command() {
+        let cli = Cli::try_parse_from([
+            "ask-bridge",
+            "--provider",
+            "copilot",
+            "--timeout",
+            "1800",
+            "--new",
+            "listen",
+        ])
+        .unwrap();
+        assert_eq!(cli.provider, Some(Provider::Copilot));
+        assert_eq!(cli.timeout, 1800);
+        assert!(cli.new);
+        assert!(matches!(cli.command, Some(Commands::Listen)));
+        assert!(validate_provider_feature_support(Provider::Copilot, &cli).is_ok());
+    }
+
+    #[test]
+    fn listener_rejects_non_copilot_and_automated_attachment_or_model_options() {
+        let non_copilot =
+            Cli::try_parse_from(["ask-bridge", "--provider", "chatgpt", "listen"]).unwrap();
+        assert!(
+            validate_provider_feature_support(Provider::ChatGpt, &non_copilot)
+                .unwrap_err()
+                .contains("only for Microsoft 365 Copilot")
+        );
+
+        let automated_input = Cli::try_parse_from([
+            "ask-bridge",
+            "--provider",
+            "copilot",
+            "--file",
+            "report.pdf",
+            "--model",
+            "Auto",
+            "listen",
+        ])
+        .unwrap();
+        assert!(
+            validate_provider_feature_support(Provider::Copilot, &automated_input)
+                .unwrap_err()
+                .contains("directly in the visible Microsoft 365 Copilot page")
+        );
     }
 
     #[test]
@@ -3593,6 +3658,29 @@ mod tests {
         }
         assert!(script.contains("const target = canonical(\"GPT 5.5 Think deeper\")"));
         assert!(script.contains("/^(?:gpt|claude)/"));
+    }
+
+    #[test]
+    fn copilot_listener_script_injects_a_safe_self_cleaning_return_button() {
+        let script = build_copilot_listener_poll_js().unwrap();
+        for expected in [
+            "ask-bridge-return-vscode",
+            "Return VS Code",
+            "__ask_bridge_listener_state_v1",
+            "__ask_bridge_listener_cleanup_timer_v1",
+            "lastHeartbeat",
+            "5000",
+            "Waiting for M365",
+            "responseText",
+            "document.body.appendChild(button)",
+        ] {
+            assert!(script.contains(expected), "missing {expected:?}");
+        }
+        let serialized_selector =
+            serde_json::to_string(Provider::Copilot.assistant_selector()).unwrap();
+        assert!(script.contains(&serialized_selector));
+        assert!(script.contains("button[data-testid*="));
+        assert!(!script.contains("innerHTML ="));
     }
 
     #[test]
@@ -5384,6 +5472,304 @@ fn scrape_latest_markdown_from_dom(
     }
 
     Ok(content)
+}
+
+fn build_copilot_listener_poll_js() -> Result<String, String> {
+    let composer_selectors = Provider::Copilot.composer_selectors_json();
+    let stop_selectors = Provider::Copilot.stop_button_selectors_json();
+    let assistant_selector = serde_json::to_string(Provider::Copilot.assistant_selector())
+        .map_err(|e| format!("Failed to serialize Copilot assistant selector: {}", e))?;
+    let action_selector = serde_json::to_string(COPILOT_ACTION_CONTROL_SELECTOR)
+        .map_err(|e| format!("Failed to serialize Copilot action selector: {}", e))?;
+
+    Ok(r#"() => {
+        const stateKey = '__ask_bridge_listener_state_v1';
+        const timerKey = '__ask_bridge_listener_cleanup_timer_v1';
+        const buttonId = 'ask-bridge-return-vscode';
+        const now = Date.now();
+        let state = window[stateKey];
+        if (!state || state.version !== 1) {
+            state = { version: 1, clicked: false, responseText: '', lastHeartbeat: now };
+            window[stateKey] = state;
+        }
+        state.lastHeartbeat = now;
+
+        if (!window[timerKey]) {
+            window[timerKey] = window.setInterval(() => {
+                const active = window[stateKey];
+                if (!active || Date.now() - Number(active.lastHeartbeat || 0) > 5000) {
+                    document.getElementById(buttonId)?.remove();
+                    delete window[stateKey];
+                    window.clearInterval(window[timerKey]);
+                    delete window[timerKey];
+                }
+            }, 1000);
+        }
+
+        const isVisible = (el) => {
+            if (!el) return false;
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                style.opacity !== '0' &&
+                rect.width > 0 &&
+                rect.height > 0;
+        };
+        const textFor = (el) => [
+            el?.getAttribute?.('aria-label'),
+            el?.getAttribute?.('title'),
+            el?.getAttribute?.('data-testid'),
+            el?.getAttribute?.('data-icon-name'),
+            el?.getAttribute?.('data-icon'),
+            el?.getAttribute?.('data-automation-id'),
+            el?.textContent
+        ].filter(Boolean).join(' ');
+        const composer = __COMPOSER_SELECTORS__
+            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+            .find(isVisible);
+        let button = document.getElementById(buttonId);
+        if (!composer) {
+            button?.remove();
+            return {
+                clicked: Boolean(state.clicked),
+                responseText: String(state.responseText || ''),
+                status: 'waiting_for_composer',
+                injected: false,
+                ready: false,
+                generating: false
+            };
+        }
+
+        const messages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__))
+            .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
+        const latest = messages[messages.length - 1];
+        const latestText = (latest?.innerText || latest?.textContent || '').trim();
+        const copyActions = Array.from(document.querySelectorAll(__ACTION_SELECTOR__))
+            .filter((control) => {
+                const label = textFor(control);
+                return /copy|複製|复制|コピー|복사/i.test(label) &&
+                    !/code|程式碼|代码|table|表格/i.test(label) &&
+                    !control.closest('pre, code, [class*="code"], [data-testid*="code"]');
+            });
+        const stopButton = __STOP_SELECTORS__
+            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+            .find(isVisible);
+        const generating = Boolean(stopButton);
+        const hasResponse = latestText.length > 0 || copyActions.length > 0;
+        const ready = hasResponse && !generating && !state.clicked;
+
+        if (!button) {
+            button = document.createElement('button');
+            button.id = buttonId;
+            button.type = 'button';
+            button.setAttribute('aria-label', 'Return the latest Microsoft 365 Copilot response to VS Code');
+            button.setAttribute('data-ask-bridge-control', 'return-vscode');
+            Object.assign(button.style, {
+                position: 'fixed',
+                zIndex: '2147483647',
+                minWidth: '168px',
+                height: '38px',
+                padding: '0 16px',
+                border: '1px solid rgba(255,255,255,.28)',
+                borderRadius: '8px',
+                background: '#242424',
+                color: '#ffffff',
+                boxShadow: '0 4px 16px rgba(0,0,0,.28)',
+                font: '600 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
+                cursor: 'pointer'
+            });
+            button.addEventListener('mouseenter', () => {
+                if (!button.disabled) button.style.background = '#111111';
+            });
+            button.addEventListener('mouseleave', () => {
+                button.style.background = '#242424';
+            });
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (button.disabled || button.dataset.ready !== 'true') return;
+                const currentMessages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__))
+                    .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
+                const currentLatest = currentMessages[currentMessages.length - 1];
+                const responseText =
+                    (currentLatest?.innerText || currentLatest?.textContent || '').trim();
+                window[stateKey] = {
+                    ...window[stateKey],
+                    version: 1,
+                    clicked: true,
+                    clickedAt: Date.now(),
+                    responseText,
+                    lastHeartbeat: Date.now()
+                };
+                button.disabled = true;
+                button.dataset.ready = 'false';
+                button.textContent = 'Returning to VS Code…';
+            }, true);
+            document.body.appendChild(button);
+        }
+
+        const composerRect = composer.getBoundingClientRect();
+        const buttonWidth = 168;
+        const left = Math.max(
+            12,
+            Math.min(window.innerWidth - buttonWidth - 12, composerRect.right - buttonWidth)
+        );
+        const top = composerRect.top >= 52
+            ? composerRect.top - 46
+            : Math.min(window.innerHeight - 50, composerRect.bottom + 8);
+        button.style.left = `${Math.round(left)}px`;
+        button.style.top = `${Math.round(top)}px`;
+        button.style.display = 'block';
+
+        if (state.clicked) {
+            button.disabled = true;
+            button.dataset.ready = 'false';
+            button.textContent = 'Returning to VS Code…';
+        } else {
+            button.disabled = !ready;
+            button.dataset.ready = ready ? 'true' : 'false';
+            button.style.cursor = ready ? 'pointer' : 'not-allowed';
+            button.style.opacity = ready ? '1' : '.72';
+            button.textContent = generating
+                ? 'Waiting for M365…'
+                : hasResponse
+                    ? 'Return VS Code'
+                    : 'Waiting for response…';
+        }
+
+        return {
+            clicked: Boolean(state.clicked),
+            responseText: String(state.responseText || ''),
+            status: state.clicked
+                ? 'clicked'
+                : generating
+                    ? 'generating'
+                    : ready
+                        ? 'ready'
+                        : 'waiting_for_response',
+            injected: true,
+            ready,
+            generating
+        };
+    }"#
+    .replace("__COMPOSER_SELECTORS__", composer_selectors)
+    .replace("__STOP_SELECTORS__", stop_selectors)
+    .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
+    .replace("__ACTION_SELECTOR__", &action_selector))
+}
+
+fn cleanup_copilot_listener(config_path: &str) {
+    let _ = call_mcp_tool(
+        config_path,
+        "evaluate_script",
+        serde_json::json!({
+            "function": r#"() => {
+                const stateKey = '__ask_bridge_listener_state_v1';
+                const timerKey = '__ask_bridge_listener_cleanup_timer_v1';
+                document.getElementById('ask-bridge-return-vscode')?.remove();
+                if (window[timerKey]) window.clearInterval(window[timerKey]);
+                delete window[timerKey];
+                delete window[stateKey];
+                return true;
+            }"#
+        }),
+    );
+}
+
+fn wait_for_copilot_listener(
+    config_path: &str,
+    timeout_seconds: u64,
+    verbose: bool,
+) -> Result<String, String> {
+    cleanup_copilot_listener(config_path);
+    let poll_js = build_copilot_listener_poll_js()?;
+    let started = Instant::now();
+    let timeout = Duration::from_secs(timeout_seconds);
+    let mut last_status = "initializing".to_string();
+    let mut last_error: Option<String> = None;
+
+    append_copilot_diagnostic(
+        "listener_started",
+        serde_json::json!({ "timeout_seconds": timeout_seconds }),
+    );
+
+    while started.elapsed() < timeout {
+        match call_mcp_tool(
+            config_path,
+            "evaluate_script",
+            serde_json::json!({ "function": poll_js.as_str() }),
+        ) {
+            Ok(result) => match parse_script_result(&result) {
+                Ok(parsed) => {
+                    last_status = parsed["status"].as_str().unwrap_or("unknown").to_string();
+                    if parsed["clicked"].as_bool().unwrap_or(false) {
+                        let fallback = parsed["responseText"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+                        let extracted = copy_latest_markdown(config_path, Provider::Copilot)
+                            .ok()
+                            .filter(|value| !value.trim().is_empty());
+                        cleanup_copilot_listener(config_path);
+                        let (answer, method) = match extracted {
+                            Some(value) => (value, "latest_response_extractor"),
+                            None if !fallback.is_empty() => (fallback, "listener_dom_snapshot"),
+                            None => {
+                                return Err(
+                                    "Return VS Code was clicked, but no Microsoft 365 Copilot response could be extracted"
+                                        .to_string(),
+                                );
+                            }
+                        };
+                        append_copilot_diagnostic(
+                            "listener_returned",
+                            serde_json::json!({
+                                "wait_duration_ms": started.elapsed().as_millis(),
+                                "response_character_count": answer.chars().count(),
+                                "method": method
+                            }),
+                        );
+                        return Ok(answer);
+                    }
+                    last_error = None;
+                }
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) => last_error = Some(error),
+        }
+
+        if verbose {
+            eprint!(
+                "\rWaiting for Return VS Code (status: {}, elapsed: {}s)...",
+                last_status,
+                started.elapsed().as_secs()
+            );
+            let _ = io::stderr().flush();
+        }
+        thread::sleep(Duration::from_millis(400));
+    }
+
+    if verbose {
+        eprintln!();
+    }
+    cleanup_copilot_listener(config_path);
+    append_copilot_diagnostic(
+        "listener_timeout",
+        serde_json::json!({
+            "timeout_seconds": timeout_seconds,
+            "last_status": last_status,
+            "had_poll_error": last_error.is_some()
+        }),
+    );
+    let detail = last_error
+        .map(|error| format!(" Last browser error: {}", error))
+        .unwrap_or_default();
+    Err(format!(
+        "Timed out after {} seconds waiting for the Return VS Code button. Last status: {}.{}",
+        timeout_seconds, last_status, detail
+    ))
 }
 
 fn download_images_from_latest_message(
@@ -8498,6 +8884,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let is_headless = match &cli.command {
         Some(Commands::Login) => false, // Force headful only for login command so user can see it to log in
+        Some(Commands::Listen) => false, // Listener is an explicitly interactive M365 browser session
         Some(Commands::Get { .. }) => false, // Default get to headful for debugging by default
         _ => cli.headless, // Respect --headless (defaults to true) for all other commands (including Open)
     };
@@ -8659,6 +9046,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         eprintln!("Error copying latest response Markdown: {}", e);
                         std::process::exit(1);
                     }
+                }
+                return Ok(());
+            }
+            Commands::Listen => {
+                if let Err(e) = ensure_provider_tab(
+                    &config_path,
+                    Provider::Copilot,
+                    cli.new,
+                    is_headless,
+                    command_verbose,
+                ) {
+                    eprintln!("Error ensuring Microsoft 365 Copilot tab: {}", e);
+                    std::process::exit(1);
+                }
+
+                match check_login_status(&config_path, Provider::Copilot, command_verbose) {
+                    Ok(LoginState::LoggedOut) => {
+                        if let Err(e) = complete_query_login(
+                            &config_path,
+                            Provider::Copilot,
+                            cli.timeout,
+                            command_verbose,
+                        ) {
+                            eprintln!("Error: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    Ok(LoginState::LoggedIn) | Ok(LoginState::Unknown) => {}
+                    Err(error) if command_verbose => {
+                        eprintln!(
+                            "Warning: Failed to verify Microsoft 365 Copilot login: {}",
+                            error
+                        );
+                    }
+                    Err(_) => {}
+                }
+
+                let markdown =
+                    match wait_for_copilot_listener(&config_path, cli.timeout, command_verbose) {
+                        Ok(markdown) => markdown,
+                        Err(error) => {
+                            eprintln!("Error waiting for Microsoft 365 Copilot: {}", error);
+                            std::process::exit(1);
+                        }
+                    };
+                if let Some(ref output_path) = cli.output
+                    && let Err(error) = std::fs::write(output_path, &markdown)
+                {
+                    eprintln!("Error writing output file: {}", error);
+                    std::process::exit(1);
+                }
+                if let Err(error) = render_markdown(&markdown, use_glow) {
+                    eprintln!("Error rendering Markdown: {}", error);
+                    std::process::exit(1);
                 }
                 return Ok(());
             }

@@ -85,7 +85,7 @@ Start-Process "https://github.com/EngelsChou/ask-bridge/releases/latest"
 請從最新版 Release 下載同一版本的 `install.exe` 與 `uninstall.exe`。若檔案具有數位簽章，可在「內容 → 數位簽章」確認簽署者；Release 未設定 Authenticode 憑證時仍會發布未簽章的 Windows 安裝檔，Windows 可能顯示「不明的發行者」。安裝是使用者層級，不需要系統管理員權限。
 
 > [!IMPORTANT]
-> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.11 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
+> **v0.3.0 或更舊版本請勿執行 `ask-bridge update`。** v0.3.0 的更新器仍會讀取 upstream `main`，可能降回 v0.2.8。請先從 Release 手動執行 v0.3.12 `install.exe` 完成一次升級。只有內嵌受信任簽章指紋的 Windows build 才支援 `ask-bridge update`；未簽章 build 請持續從 Release 手動更新。
 
 既有 v0.3.0 或更舊的 macOS/Linux 安裝沒有雜湊綁定的版本紀錄，第一次遷移必須明確允許取代：
 
@@ -410,7 +410,17 @@ ask-bridge --provider claude open
 ask-bridge --provider copilot open
 ```
 
-### 11. 關閉瀏覽器 instance
+### 11. 等候 M365 網頁手動分析後回傳
+
+若要在可見的 Microsoft 365 Copilot Chrome 中自行上傳檔案、截圖或加入工作內容，完成提問後再把最後一則回覆傳回呼叫端：
+
+```bash
+ask-bridge --provider copilot --timeout 1800 listen
+```
+
+頁面輸入框旁會出現 `Return VS Code` 按鈕。回覆生成期間按鈕會保持停用；完成後按下按鈕，CLI 會擷取最後一則 M365 回覆並輸出至 stdout。加上 `--new` 可先開啟全新對話。此模式不接受 `--image`、`--file` 或 `--model`，附件與模型都由使用者直接在可見的 M365 頁面操作。
+
+### 12. 關閉瀏覽器 instance
 
 若要關閉 `ask-bridge` 管理的 Chrome debug profile instance：
 
@@ -420,7 +430,7 @@ ask-bridge close
 
 `close` 只會關閉使用 `~/.config/ask-bridge/chrome-profile` 且監聽 debug port `9223` 的 `ask-bridge` Chrome instance；若該 port 被非 `ask-bridge` Chrome 程序占用，會回報錯誤而不會關閉它。
 
-### 12. 更新 ask-bridge
+### 13. 更新 ask-bridge
 
 **只有 v0.3.3 或更新版本**可以直接執行：
 
@@ -430,7 +440,7 @@ ask-bridge update
 
 具有內嵌受信任簽章指紋的 Windows build 會下載最新版 Release 的 `install.exe`，驗證有效的 Engels Chou Authenticode 簽章、固定憑證指紋及版本下限後才執行；未簽章 Windows build 會安全拒絕自動更新，請改從 Release 手動下載。macOS/Linux 會執行固定在 `main-add-m365-copilot` 的安裝腳本並傳入目前版本下限。
 
-v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.11 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
+v0.3.0 或更舊版本不可使用此命令，因舊更新器可能從 upstream `main` 安裝 v0.2.8。Windows 請改用 Release 的 v0.3.12 `install.exe`；macOS/Linux 請使用前述一次性 `ASK_BRIDGE_ALLOW_DOWNGRADE=1` 遷移命令。
 
 ## 運作原理
 

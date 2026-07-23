@@ -6,6 +6,14 @@
 
 ---
 
+## [0.3.12] - 2026-07-23
+
+### Added
+- 新增 `ask-bridge --provider copilot listen` 互動模式：以可見 Chrome 開啟 Microsoft 365 Copilot，在輸入框旁注入 `Return VS Code` 按鈕，等候使用者於 M365 網頁自行加入檔案、截圖或工作內容並完成分析後，將最後一則回覆輸出至 stdout。
+- Listener 按鈕會在 M365 SPA 重新渲染後自動補回、生成期間停用，CLI 中止或逾時後由 heartbeat 自動移除。
+
+---
+
 ## [0.3.11] - 2026-07-23
 
 ### Fixed
