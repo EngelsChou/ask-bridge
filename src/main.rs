@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.15")]
+#[command(version = "0.3.16")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -3691,8 +3691,11 @@ mod tests {
             "lastHeartbeat",
             "5000",
             "Waiting for M365",
+            "Waiting for response…",
             "responseText",
-            "document.body.appendChild(button)",
+            "targetContainer.appendChild(button)",
+            "const hasResponse = latestText.length > 0",
+            "const ready = hasResponse && !generating && !state.clicked",
         ] {
             assert!(script.contains(expected), "missing {expected:?}");
         }
@@ -5585,8 +5588,22 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                 }
             }
 
+            let latestText = '';
+            for (const doc of allDocs) {
+                try {
+                    const messages = Array.from(doc.querySelectorAll(__ASSISTANT_SELECTOR__))
+                        .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
+                    if (messages.length > 0) {
+                        const latest = messages[messages.length - 1];
+                        latestText = (latest?.innerText || latest?.textContent || '').trim();
+                        if (latestText) break;
+                    }
+                } catch (e) {}
+            }
+
             const generating = Boolean(stopButton);
-            const ready = !generating && !state.clicked;
+            const hasResponse = latestText.length > 0;
+            const ready = hasResponse && !generating && !state.clicked;
 
             let button = document.getElementById(buttonId);
             if (!button && composerDoc !== document) {
@@ -5703,7 +5720,11 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                 button.dataset.ready = ready ? 'true' : 'false';
                 button.style.cursor = ready ? 'pointer' : 'not-allowed';
                 button.style.opacity = ready ? '1' : '.72';
-                button.textContent = generating ? 'Waiting for M365…' : 'Return VS Code';
+                button.textContent = generating
+                    ? 'Waiting for M365…'
+                    : hasResponse
+                        ? 'Return VS Code'
+                        : 'Waiting for response…';
             }
 
             return {
@@ -5713,7 +5734,9 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                     ? 'clicked'
                     : generating
                         ? 'generating'
-                        : 'ready',
+                        : ready
+                            ? 'ready'
+                            : 'waiting_for_response',
                 injected: true,
                 ready,
                 generating
@@ -5752,6 +5775,125 @@ fn cleanup_copilot_listener(config_path: &str) {
             }"#
         }),
     );
+}
+
+/// Wait until the Microsoft 365 Copilot page is signed in and shows the chat
+/// composer. The interactive listener must survive a full manual sign-in
+/// (password + MFA can take minutes), so this waits up to the listener
+/// timeout instead of the short readiness window used by automated queries.
+fn wait_for_copilot_listener_ready(
+    config_path: &str,
+    timeout_seconds: u64,
+    verbose: bool,
+) -> Result<(), String> {
+    let started = Instant::now();
+    let timeout = Duration::from_secs(timeout_seconds.max(1));
+    let mut announced_login = false;
+    let mut blocked_since: Option<Instant> = None;
+    let mut iteration: u64 = 0;
+
+    append_copilot_diagnostic(
+        "listener_waiting_ready",
+        serde_json::json!({ "timeout_seconds": timeout_seconds }),
+    );
+
+    loop {
+        // Sign-in redirects can move the tab through login domains; keep the
+        // Copilot tab selected whenever one is present again.
+        if iteration % 10 == 0
+            && let Ok(list_res) = call_mcp_tool(config_path, "list_pages", serde_json::json!({}))
+            && let Ok(text) = tool_text(&list_res)
+            && let Some(page) = parse_pages(&text)
+                .into_iter()
+                .find(|page| Provider::Copilot.owns_url(&page.url))
+        {
+            let _ = call_mcp_tool(
+                config_path,
+                "select_page",
+                serde_json::json!({ "pageId": page.id, "bringToFront": false }),
+            );
+        }
+
+        // A /chat/blocked redirect can appear transiently while sign-in
+        // redirects settle, so only give up when it persists.
+        let current_url = call_mcp_tool(
+            config_path,
+            "evaluate_script",
+            serde_json::json!({ "function": "() => window.location.href" }),
+        )
+        .ok()
+        .and_then(|res| parse_script_result(&res).ok())
+        .and_then(|parsed| parsed.as_str().map(|url| url.to_string()))
+        .unwrap_or_default();
+        if let Some(error) = copilot_blocked_page_error(&current_url) {
+            let since = *blocked_since.get_or_insert_with(Instant::now);
+            if since.elapsed() >= Duration::from_secs(15) {
+                append_copilot_diagnostic(
+                    "copilot_unavailable",
+                    serde_json::json!({ "reason": "blocked_page", "phase": "listener_ready" }),
+                );
+                return Err(error);
+            }
+        } else {
+            blocked_since = None;
+        }
+
+        let signals = call_mcp_tool(
+            config_path,
+            "evaluate_script",
+            serde_json::json!({ "function": Provider::Copilot.login_signals_js() }),
+        )
+        .and_then(|res| parse_script_result(&res))
+        .and_then(|parsed| {
+            serde_json::from_value::<LoginSignals>(parsed)
+                .map_err(|e| format!("Failed to parse login signals: {}", e))
+        });
+
+        if let Ok(signals) = signals {
+            if signals.composer {
+                append_copilot_diagnostic(
+                    "listener_ready",
+                    serde_json::json!({ "wait_duration_ms": started.elapsed().as_millis() }),
+                );
+                if verbose {
+                    eprintln!();
+                }
+                return Ok(());
+            }
+            if !announced_login && signals.state(Provider::Copilot) == LoginState::LoggedOut {
+                announced_login = true;
+                println!(
+                    "Microsoft 365 Copilot needs sign-in. Complete the login in the Chrome window; the listener keeps waiting (up to {} seconds).",
+                    timeout_seconds
+                );
+                append_copilot_diagnostic("listener_waiting_login", serde_json::json!({}));
+            }
+        }
+
+        if started.elapsed() >= timeout {
+            if verbose {
+                eprintln!();
+            }
+            append_copilot_diagnostic(
+                "listener_ready_timeout",
+                serde_json::json!({ "timeout_seconds": timeout_seconds }),
+            );
+            return Err(format!(
+                "Timed out after {} seconds waiting for Microsoft 365 Copilot to become ready (sign-in incomplete or the chat composer never appeared). Sign in to https://m365.cloud.microsoft/chat in the ask-bridge Chrome window, then run the listener again.",
+                timeout_seconds
+            ));
+        }
+
+        if verbose {
+            eprint!(
+                "\rWaiting for Microsoft 365 Copilot sign-in/readiness ({}s elapsed)...",
+                started.elapsed().as_secs()
+            );
+            let _ = io::stderr().flush();
+        }
+        iteration += 1;
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn wait_for_copilot_listener(
@@ -8402,6 +8544,17 @@ fn ensure_provider_tab(
     headless: bool,
     verbose: bool,
 ) -> Result<(), String> {
+    open_provider_tab(config_path, provider, force_new, headless, verbose)?;
+    wait_provider_ready(config_path, provider, headless, verbose)
+}
+
+fn open_provider_tab(
+    config_path: &str,
+    provider: Provider,
+    force_new: bool,
+    headless: bool,
+    verbose: bool,
+) -> Result<(), String> {
     if verbose {
         println!("Checking open Chrome tabs...");
     }
@@ -8586,6 +8739,15 @@ fn ensure_provider_tab(
         }
     }
 
+    Ok(())
+}
+
+fn wait_provider_ready(
+    config_path: &str,
+    provider: Provider,
+    headless: bool,
+    verbose: bool,
+) -> Result<(), String> {
     // Wait for the provider composer to be present.
     if verbose {
         println!("Waiting for {} to load...", provider.display_name());
@@ -9127,7 +9289,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             Commands::Listen => {
-                if let Err(e) = ensure_provider_tab(
+                // Only open/select the tab here. The readiness wait below must
+                // survive a full manual sign-in, which the short readiness
+                // window inside ensure_provider_tab would abort.
+                if let Err(e) = open_provider_tab(
                     &config_path,
                     Provider::Copilot,
                     cli.new,
@@ -9138,26 +9303,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     std::process::exit(1);
                 }
 
-                match check_login_status(&config_path, Provider::Copilot, command_verbose) {
-                    Ok(LoginState::LoggedOut) => {
-                        if let Err(e) = complete_query_login(
-                            &config_path,
-                            Provider::Copilot,
-                            cli.timeout,
-                            command_verbose,
-                        ) {
-                            eprintln!("Error: {}", e);
-                            std::process::exit(1);
-                        }
-                    }
-                    Ok(LoginState::LoggedIn) | Ok(LoginState::Unknown) => {}
-                    Err(error) if command_verbose => {
-                        eprintln!(
-                            "Warning: Failed to verify Microsoft 365 Copilot login: {}",
-                            error
-                        );
-                    }
-                    Err(_) => {}
+                if let Err(e) =
+                    wait_for_copilot_listener_ready(&config_path, cli.timeout, command_verbose)
+                {
+                    eprintln!("Error waiting for Microsoft 365 Copilot: {}", e);
+                    std::process::exit(1);
                 }
 
                 let markdown =

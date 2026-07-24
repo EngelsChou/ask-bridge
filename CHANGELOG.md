@@ -6,6 +6,17 @@
 
 ---
 
+## [0.3.16] - 2026-07-24
+
+### Fixed
+- `listen` ’Õ!¼KÕ{e“ĞM>BŸABb( 45 Ògúş8eF((8e3_Æ¼MFA B listener sP_ô `Return VS Code` 	8`úşş( listener (t `--timeout` “I…{eŒJ)8eF1ÒÏÒ¢åêÕÍ°xÖ Copilot 	ŒŒM‹Ëèe	
+- `/chat/blocked` 9ºŒ 15 Òå
+M$š! Copilot ˆ
+M{eI@N„¬B¤$
+- `Return VS Code` 	b©	Ş†MıŞÊ„$šM365 *"ûUŞ†Bo: `Waiting for response&` &\(MŞÊŒà÷Ö0Ş†1W
+
+---
+
 ## [0.3.12] - 2026-07-23
 
 ### Added
