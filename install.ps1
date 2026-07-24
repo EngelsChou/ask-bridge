@@ -7,7 +7,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Version = "0.3.16"
+$Version = "0.3.17"
 $AllowDowngradeRequested = $AllowDowngrade -or $env:ASK_BRIDGE_ALLOW_DOWNGRADE -eq "1"
 
 function ConvertTo-AskBridgeReleaseVersion {

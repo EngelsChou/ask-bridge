@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.16")]
+#[command(version = "0.3.17")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -2146,7 +2146,7 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
     let mut last_identity_error = None;
     while Instant::now() < startup_deadline {
         if TcpStream::connect("127.0.0.1:9223").is_ok() {
-            let snapshot = inspect_chrome_debug_port(&profile_path);
+            let mut snapshot = inspect_chrome_debug_port(&profile_path);
             if let Some(record) =
                 build_chrome_process_record(&snapshot.listener_pids, snapshot.browser_id.as_deref())
             {
@@ -2156,6 +2156,14 @@ fn start_chrome_if_needed(headless: bool, verbose: bool) -> Result<(), String> {
                         error
                     ));
                 }
+                // We removed the previous pid file before this launch, so the
+                // snapshot carries no record. Adopt the one just written: it is
+                // the identity proof for the window step below. Command-line
+                // based discovery (ask_pids) cannot be relied on here because
+                // recent Chrome builds deny command-line reads (WMI returns an
+                // empty CommandLine), which made every cold start fail with
+                // "window process could not be identified".
+                snapshot.record = Some(record.clone());
                 if verbose && record.pid != child_pid {
                     println!(
                         "Recorded actual Chrome listener PID {} (launcher PID {}).",
@@ -2319,6 +2327,25 @@ struct ChromeDebugSnapshot {
     record: Option<ChromeProcessRecord>,
     browser_id: Option<String>,
     ask_pids: Vec<String>,
+}
+
+/// PIDs `close` is allowed to terminate. Command-line discovery (ask_pids) is
+/// preferred, but recent Chrome builds deny command-line reads to other
+/// processes, so fall back to the recorded identity when its CDP browser id
+/// and sole listener PID still match.
+fn chrome_close_target_pids(snapshot: &ChromeDebugSnapshot) -> Vec<String> {
+    if !snapshot.ask_pids.is_empty() {
+        return snapshot.ask_pids.clone();
+    }
+    if chrome_record_matches_current(
+        snapshot.record.as_ref(),
+        snapshot.browser_id.as_deref(),
+        &snapshot.listener_pids,
+    ) && let Some(record) = snapshot.record.as_ref()
+    {
+        return vec![record.pid.to_string()];
+    }
+    Vec::new()
 }
 
 fn debug_listener_scope_is_unambiguous(listener_pids: &[String]) -> bool {
@@ -2569,14 +2596,15 @@ fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
         );
     }
 
-    if snapshot.ask_pids.is_empty() {
+    let close_pids = chrome_close_target_pids(&snapshot);
+    if close_pids.is_empty() {
         return Err(
             "Port 9223 is already used by a non-ask Chrome process. Stop it or use a different debugging port."
                 .to_string(),
         );
     }
 
-    for pid in &snapshot.ask_pids {
+    for pid in &close_pids {
         #[cfg(target_os = "windows")]
         {
             let _ = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
@@ -2587,10 +2615,26 @@ fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
         }
     }
 
-    for _ in 0..50 {
+    for attempt in 0..50 {
         if TcpStream::connect("127.0.0.1:9223").is_err() {
             let _ = remove_chrome_pid_file();
             return Ok(true);
+        }
+        // Recent Chrome builds ignore the graceful close request; escalate to a
+        // forced termination of the verified PIDs instead of timing out.
+        if attempt == 20 {
+            for pid in &close_pids {
+                #[cfg(target_os = "windows")]
+                {
+                    let _ = Command::new("taskkill")
+                        .args(["/PID", pid, "/T", "/F"])
+                        .status();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = Command::new("kill").args(["-KILL", pid]).status();
+                }
+            }
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -4746,6 +4790,69 @@ mod tests {
             Some("browser-123"),
             &["020728".to_string()]
         ));
+    }
+
+    #[test]
+    fn close_targets_prefer_ask_pids_and_fall_back_to_matching_record() {
+        let record = ChromeProcessRecord {
+            pid: 20728,
+            browser_id: Some("browser-123".to_string()),
+        };
+
+        // Command-line discovery available: use it.
+        let with_ask_pids = ChromeDebugSnapshot {
+            listener_pids: vec!["20728".to_string()],
+            record: Some(record.clone()),
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: vec!["30000".to_string()],
+        };
+        assert_eq!(
+            chrome_close_target_pids(&with_ask_pids),
+            vec!["30000".to_string()]
+        );
+
+        // Chrome denies command-line reads: fall back to the verified record.
+        let record_only = ChromeDebugSnapshot {
+            listener_pids: vec!["20728".to_string()],
+            record: Some(record.clone()),
+            browser_id: Some("browser-123".to_string()),
+            ask_pids: Vec::new(),
+        };
+        assert_eq!(
+            chrome_close_target_pids(&record_only),
+            vec!["20728".to_string()]
+        );
+
+        // A mismatched record must never authorize closing a foreign Chrome.
+        let mismatched = ChromeDebugSnapshot {
+            listener_pids: vec!["30000".to_string()],
+            record: Some(record),
+            browser_id: Some("browser-456".to_string()),
+            ask_pids: Vec::new(),
+        };
+        assert!(chrome_close_target_pids(&mismatched).is_empty());
+    }
+
+    #[test]
+    fn window_candidates_accept_freshly_recorded_identity_without_command_lines() {
+        // Cold start on systems where Chrome blocks command-line reads: the
+        // just-written record (matching browser id + sole listener) must be
+        // enough for the visible-window step.
+        let snapshot = ChromeDebugSnapshot {
+            listener_pids: vec!["18704".to_string()],
+            record: Some(ChromeProcessRecord {
+                pid: 18704,
+                browser_id: Some("browser-abc".to_string()),
+            }),
+            browser_id: Some("browser-abc".to_string()),
+            ask_pids: Vec::new(),
+        };
+        assert_eq!(chrome_window_candidate_pids(&snapshot), vec![18704]);
+        assert!(apply_chrome_window_mode_with(false, &snapshot, |pids| {
+            assert_eq!(pids, [18704]);
+            Ok(())
+        })
+        .is_ok());
     }
 
     #[cfg(target_os = "windows")]
