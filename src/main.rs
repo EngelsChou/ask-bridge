@@ -468,7 +468,14 @@ impl Provider {
                 r#"[
                     "textarea#userInput",
                     "textarea[data-testid*=\"chat-input\"]",
-                    "[contenteditable=\"true\"][role=\"textbox\"]"
+                    "[contenteditable=\"true\"][role=\"textbox\"]",
+                    "textarea",
+                    "[contenteditable=\"true\"]",
+                    "[placeholder*=\"Copilot\"]",
+                    "[placeholder*=\"傳送\"]",
+                    "[aria-label*=\"Copilot\"]",
+                    "[aria-label*=\"傳送\"]",
+                    "div[role=\"textbox\"]"
                 ]"#
             }
         }
@@ -617,7 +624,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.12")]
+#[command(version = "0.3.13")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -5529,35 +5536,12 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
             .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
             .find(isVisible);
         let button = document.getElementById(buttonId);
-        if (!composer) {
-            button?.remove();
-            return {
-                clicked: Boolean(state.clicked),
-                responseText: String(state.responseText || ''),
-                status: 'waiting_for_composer',
-                injected: false,
-                ready: false,
-                generating: false
-            };
-        }
 
-        const messages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__))
-            .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
-        const latest = messages[messages.length - 1];
-        const latestText = (latest?.innerText || latest?.textContent || '').trim();
-        const copyActions = Array.from(document.querySelectorAll(__ACTION_SELECTOR__))
-            .filter((control) => {
-                const label = textFor(control);
-                return /copy|複製|复制|コピー|복사/i.test(label) &&
-                    !/code|程式碼|代码|table|表格/i.test(label) &&
-                    !control.closest('pre, code, [class*="code"], [data-testid*="code"]');
-            });
         const stopButton = __STOP_SELECTORS__
             .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
             .find(isVisible);
         const generating = Boolean(stopButton);
-        const hasResponse = latestText.length > 0 || copyActions.length > 0;
-        const ready = hasResponse && !generating && !state.clicked;
+        const ready = !generating && !state.clicked;
 
         if (!button) {
             button = document.createElement('button');
@@ -5592,8 +5576,13 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                 const currentMessages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__))
                     .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
                 const currentLatest = currentMessages[currentMessages.length - 1];
-                const responseText =
-                    (currentLatest?.innerText || currentLatest?.textContent || '').trim();
+                let responseText = (currentLatest?.innerText || currentLatest?.textContent || '').trim();
+                if (!responseText) {
+                    const markdownBlocks = Array.from(document.querySelectorAll('.markdown, [class*="markdown"], .ac-textBlock, [class*="Message"]'))
+                        .map((el) => (el.innerText || el.textContent || '').trim())
+                        .filter((t) => t.length > 5);
+                    responseText = markdownBlocks[markdownBlocks.length - 1] || '';
+                }
                 window[stateKey] = {
                     ...window[stateKey],
                     version: 1,
@@ -5609,15 +5598,19 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
             document.body.appendChild(button);
         }
 
-        const composerRect = composer.getBoundingClientRect();
         const buttonWidth = 168;
-        const left = Math.max(
-            12,
-            Math.min(window.innerWidth - buttonWidth - 12, composerRect.right - buttonWidth)
-        );
-        const top = composerRect.top >= 52
-            ? composerRect.top - 46
-            : Math.min(window.innerHeight - 50, composerRect.bottom + 8);
+        let left = Math.max(12, window.innerWidth - buttonWidth - 24);
+        let top = Math.max(12, window.innerHeight - 80);
+        if (composer) {
+            const composerRect = composer.getBoundingClientRect();
+            left = Math.max(
+                12,
+                Math.min(window.innerWidth - buttonWidth - 12, composerRect.right - buttonWidth)
+            );
+            top = composerRect.top >= 52
+                ? composerRect.top - 46
+                : Math.min(window.innerHeight - 50, composerRect.bottom + 8);
+        }
         button.style.left = `${Math.round(left)}px`;
         button.style.top = `${Math.round(top)}px`;
         button.style.display = 'block';
@@ -5631,11 +5624,7 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
             button.dataset.ready = ready ? 'true' : 'false';
             button.style.cursor = ready ? 'pointer' : 'not-allowed';
             button.style.opacity = ready ? '1' : '.72';
-            button.textContent = generating
-                ? 'Waiting for M365…'
-                : hasResponse
-                    ? 'Return VS Code'
-                    : 'Waiting for response…';
+            button.textContent = generating ? 'Waiting for M365…' : 'Return VS Code';
         }
 
         return {
@@ -5645,9 +5634,7 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                 ? 'clicked'
                 : generating
                     ? 'generating'
-                    : ready
-                        ? 'ready'
-                        : 'waiting_for_response',
+                    : 'ready',
             injected: true,
             ready,
             generating
