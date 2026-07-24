@@ -4848,11 +4848,13 @@ mod tests {
             ask_pids: Vec::new(),
         };
         assert_eq!(chrome_window_candidate_pids(&snapshot), vec![18704]);
-        assert!(apply_chrome_window_mode_with(false, &snapshot, |pids| {
-            assert_eq!(pids, [18704]);
-            Ok(())
-        })
-        .is_ok());
+        assert!(
+            apply_chrome_window_mode_with(false, &snapshot, |pids| {
+                assert_eq!(pids, [18704]);
+                Ok(())
+            })
+            .is_ok()
+        );
     }
 
     #[cfg(target_os = "windows")]
