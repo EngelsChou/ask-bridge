@@ -624,7 +624,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.13")]
+#[command(version = "0.3.14")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -5490,155 +5490,231 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
         .map_err(|e| format!("Failed to serialize Copilot action selector: {}", e))?;
 
     Ok(r#"() => {
-        const stateKey = '__ask_bridge_listener_state_v1';
-        const timerKey = '__ask_bridge_listener_cleanup_timer_v1';
-        const buttonId = 'ask-bridge-return-vscode';
-        const now = Date.now();
-        let state = window[stateKey];
-        if (!state || state.version !== 1) {
-            state = { version: 1, clicked: false, responseText: '', lastHeartbeat: now };
-            window[stateKey] = state;
-        }
-        state.lastHeartbeat = now;
+        try {
+            const stateKey = '__ask_bridge_listener_state_v1';
+            const timerKey = '__ask_bridge_listener_cleanup_timer_v1';
+            const buttonId = 'ask-bridge-return-vscode';
+            const now = Date.now();
+            let state = window[stateKey];
+            if (!state || state.version !== 1) {
+                state = { version: 1, clicked: false, responseText: '', lastHeartbeat: now };
+                window[stateKey] = state;
+            }
+            state.lastHeartbeat = now;
 
-        if (!window[timerKey]) {
-            window[timerKey] = window.setInterval(() => {
-                const active = window[stateKey];
-                if (!active || Date.now() - Number(active.lastHeartbeat || 0) > 5000) {
-                    document.getElementById(buttonId)?.remove();
-                    delete window[stateKey];
-                    window.clearInterval(window[timerKey]);
-                    delete window[timerKey];
+            if (!window[timerKey]) {
+                window[timerKey] = window.setInterval(() => {
+                    const active = window[stateKey];
+                    if (!active || Date.now() - Number(active.lastHeartbeat || 0) > 5000) {
+                        document.getElementById(buttonId)?.remove();
+                        delete window[stateKey];
+                        window.clearInterval(window[timerKey]);
+                        delete window[timerKey];
+                    }
+                }, 1000);
+            }
+
+            const getDocs = () => {
+                const docs = [document];
+                try {
+                    const iframes = document.querySelectorAll('iframe, frame');
+                    for (const f of iframes) {
+                        try {
+                            const d = f.contentDocument || f.contentWindow?.document;
+                            if (d && !docs.includes(d)) docs.push(d);
+                        } catch (e) {}
+                    }
+                } catch (e) {}
+                return docs;
+            };
+
+            const isVisible = (el) => {
+                if (!el) return false;
+                try {
+                    const style = window.getComputedStyle(el);
+                    const rect = el.getBoundingClientRect();
+                    return style.display !== 'none' &&
+                        style.visibility !== 'hidden' &&
+                        style.opacity !== '0' &&
+                        rect.width > 0 &&
+                        rect.height > 0;
+                } catch (e) {
+                    return false;
                 }
-            }, 1000);
-        }
+            };
 
-        const isVisible = (el) => {
-            if (!el) return false;
-            const style = window.getComputedStyle(el);
-            const rect = el.getBoundingClientRect();
-            return style.display !== 'none' &&
-                style.visibility !== 'hidden' &&
-                style.opacity !== '0' &&
-                rect.width > 0 &&
-                rect.height > 0;
-        };
-        const textFor = (el) => [
-            el?.getAttribute?.('aria-label'),
-            el?.getAttribute?.('title'),
-            el?.getAttribute?.('data-testid'),
-            el?.getAttribute?.('data-icon-name'),
-            el?.getAttribute?.('data-icon'),
-            el?.getAttribute?.('data-automation-id'),
-            el?.textContent
-        ].filter(Boolean).join(' ');
-        const composer = __COMPOSER_SELECTORS__
-            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
-            .find(isVisible);
-        let button = document.getElementById(buttonId);
-
-        const stopButton = __STOP_SELECTORS__
-            .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
-            .find(isVisible);
-        const generating = Boolean(stopButton);
-        const ready = !generating && !state.clicked;
-
-        if (!button) {
-            button = document.createElement('button');
-            button.id = buttonId;
-            button.type = 'button';
-            button.setAttribute('aria-label', 'Return the latest Microsoft 365 Copilot response to VS Code');
-            button.setAttribute('data-ask-bridge-control', 'return-vscode');
-            Object.assign(button.style, {
-                position: 'fixed',
-                zIndex: '2147483647',
-                minWidth: '168px',
-                height: '38px',
-                padding: '0 16px',
-                border: '1px solid rgba(255,255,255,.28)',
-                borderRadius: '8px',
-                background: '#242424',
-                color: '#ffffff',
-                boxShadow: '0 4px 16px rgba(0,0,0,.28)',
-                font: '600 14px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif',
-                cursor: 'pointer'
-            });
-            button.addEventListener('mouseenter', () => {
-                if (!button.disabled) button.style.background = '#111111';
-            });
-            button.addEventListener('mouseleave', () => {
-                button.style.background = '#242424';
-            });
-            button.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                if (button.disabled || button.dataset.ready !== 'true') return;
-                const currentMessages = Array.from(document.querySelectorAll(__ASSISTANT_SELECTOR__))
-                    .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
-                const currentLatest = currentMessages[currentMessages.length - 1];
-                let responseText = (currentLatest?.innerText || currentLatest?.textContent || '').trim();
-                if (!responseText) {
-                    const markdownBlocks = Array.from(document.querySelectorAll('.markdown, [class*="markdown"], .ac-textBlock, [class*="Message"]'))
-                        .map((el) => (el.innerText || el.textContent || '').trim())
-                        .filter((t) => t.length > 5);
-                    responseText = markdownBlocks[markdownBlocks.length - 1] || '';
+            const allDocs = getDocs();
+            let composer = null;
+            let composerDoc = document;
+            for (const doc of allDocs) {
+                const found = __COMPOSER_SELECTORS__
+                    .flatMap((selector) => {
+                        try { return Array.from(doc.querySelectorAll(selector)); } catch(e) { return []; }
+                    })
+                    .find(isVisible);
+                if (found) {
+                    composer = found;
+                    composerDoc = doc;
+                    break;
                 }
-                window[stateKey] = {
-                    ...window[stateKey],
-                    version: 1,
-                    clicked: true,
-                    clickedAt: Date.now(),
-                    responseText,
-                    lastHeartbeat: Date.now()
-                };
+            }
+
+            let stopButton = null;
+            for (const doc of allDocs) {
+                const found = __STOP_SELECTORS__
+                    .flatMap((selector) => {
+                        try { return Array.from(doc.querySelectorAll(selector)); } catch(e) { return []; }
+                    })
+                    .find(isVisible);
+                if (found) {
+                    stopButton = found;
+                    break;
+                }
+            }
+
+            const generating = Boolean(stopButton);
+            const ready = !generating && !state.clicked;
+
+            let button = document.getElementById(buttonId);
+            if (!button && composerDoc !== document) {
+                button = composerDoc.getElementById(buttonId);
+            }
+
+            if (!button) {
+                button = document.createElement('button');
+                button.id = buttonId;
+                button.type = 'button';
+                button.setAttribute('aria-label', 'Return the latest Microsoft 365 Copilot response to VS Code');
+                button.setAttribute('data-ask-bridge-control', 'return-vscode');
+                button.textContent = 'Return VS Code';
+                Object.assign(button.style, {
+                    position: 'fixed',
+                    zIndex: '2147483647',
+                    minWidth: '150px',
+                    height: '38px',
+                    padding: '0 18px',
+                    border: '1px solid rgba(255,255,255,0.4)',
+                    borderRadius: '20px',
+                    background: 'linear-gradient(135deg, #0078d4 0%, #106ebe 100%)',
+                    color: '#ffffff',
+                    boxShadow: '0 4px 16px rgba(0,120,212,0.45), 0 2px 6px rgba(0,0,0,0.3)',
+                    font: '700 14px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    pointerEvents: 'auto'
+                });
+                button.addEventListener('mouseenter', () => {
+                    if (!button.disabled) {
+                        button.style.transform = 'scale(1.03)';
+                        button.style.background = 'linear-gradient(135deg, #106ebe 0%, #005a9e 100%)';
+                    }
+                });
+                button.addEventListener('mouseleave', () => {
+                    button.style.transform = 'scale(1)';
+                    button.style.background = 'linear-gradient(135deg, #0078d4 0%, #106ebe 100%)';
+                });
+                button.addEventListener('click', (event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (button.disabled || button.dataset.ready !== 'true') return;
+                    let responseText = '';
+                    for (const doc of allDocs) {
+                        try {
+                            const currentMessages = Array.from(doc.querySelectorAll(__ASSISTANT_SELECTOR__))
+                                .filter((el) => ((el.innerText || el.textContent || '').trim().length > 0));
+                            if (currentMessages.length > 0) {
+                                const currentLatest = currentMessages[currentMessages.length - 1];
+                                responseText = (currentLatest?.innerText || currentLatest?.textContent || '').trim();
+                                if (responseText) break;
+                            }
+                        } catch (e) {}
+                    }
+                    if (!responseText) {
+                        for (const doc of allDocs) {
+                            try {
+                                const markdownBlocks = Array.from(doc.querySelectorAll('.markdown, [class*="markdown"], .ac-textBlock, [class*="Message"], [data-content*="message"]'))
+                                    .map((el) => (el.innerText || el.textContent || '').trim())
+                                    .filter((t) => t.length > 5);
+                                if (markdownBlocks.length > 0) {
+                                    responseText = markdownBlocks[markdownBlocks.length - 1];
+                                    break;
+                                }
+                            } catch (e) {}
+                        }
+                    }
+                    window[stateKey] = {
+                        ...window[stateKey],
+                        version: 1,
+                        clicked: true,
+                        clickedAt: Date.now(),
+                        responseText,
+                        lastHeartbeat: Date.now()
+                    };
+                    button.disabled = true;
+                    button.dataset.ready = 'false';
+                    button.textContent = 'Returning to VS Code…';
+                }, true);
+
+                const targetContainer = composerDoc.body || composerDoc.documentElement || document.body;
+                targetContainer.appendChild(button);
+            }
+
+            const buttonWidth = 150;
+            let left = Math.max(12, window.innerWidth - buttonWidth - 24);
+            let top = Math.max(12, window.innerHeight - 80);
+            if (composer) {
+                try {
+                    const composerRect = composer.getBoundingClientRect();
+                    left = Math.max(
+                        12,
+                        Math.min(window.innerWidth - buttonWidth - 12, composerRect.right - buttonWidth - 8)
+                    );
+                    top = composerRect.top >= 48
+                        ? composerRect.top - 44
+                        : Math.min(window.innerHeight - 50, composerRect.bottom + 8);
+                } catch (e) {}
+            }
+            button.style.left = `${Math.round(left)}px`;
+            button.style.top = `${Math.round(top)}px`;
+            button.style.display = 'flex';
+
+            if (state.clicked) {
                 button.disabled = true;
                 button.dataset.ready = 'false';
                 button.textContent = 'Returning to VS Code…';
-            }, true);
-            document.body.appendChild(button);
-        }
+            } else {
+                button.disabled = !ready;
+                button.dataset.ready = ready ? 'true' : 'false';
+                button.style.cursor = ready ? 'pointer' : 'not-allowed';
+                button.style.opacity = ready ? '1' : '.72';
+                button.textContent = generating ? 'Waiting for M365…' : 'Return VS Code';
+            }
 
-        const buttonWidth = 168;
-        let left = Math.max(12, window.innerWidth - buttonWidth - 24);
-        let top = Math.max(12, window.innerHeight - 80);
-        if (composer) {
-            const composerRect = composer.getBoundingClientRect();
-            left = Math.max(
-                12,
-                Math.min(window.innerWidth - buttonWidth - 12, composerRect.right - buttonWidth)
-            );
-            top = composerRect.top >= 52
-                ? composerRect.top - 46
-                : Math.min(window.innerHeight - 50, composerRect.bottom + 8);
+            return {
+                clicked: Boolean(state.clicked),
+                responseText: String(state.responseText || ''),
+                status: state.clicked
+                    ? 'clicked'
+                    : generating
+                        ? 'generating'
+                        : 'ready',
+                injected: true,
+                ready,
+                generating
+            };
+        } catch (globalErr) {
+            return {
+                clicked: false,
+                responseText: '',
+                status: 'error',
+                error: String(globalErr),
+                injected: false,
+                ready: false,
+                generating: false
+            };
         }
-        button.style.left = `${Math.round(left)}px`;
-        button.style.top = `${Math.round(top)}px`;
-        button.style.display = 'block';
-
-        if (state.clicked) {
-            button.disabled = true;
-            button.dataset.ready = 'false';
-            button.textContent = 'Returning to VS Code…';
-        } else {
-            button.disabled = !ready;
-            button.dataset.ready = ready ? 'true' : 'false';
-            button.style.cursor = ready ? 'pointer' : 'not-allowed';
-            button.style.opacity = ready ? '1' : '.72';
-            button.textContent = generating ? 'Waiting for M365…' : 'Return VS Code';
-        }
-
-        return {
-            clicked: Boolean(state.clicked),
-            responseText: String(state.responseText || ''),
-            status: state.clicked
-                ? 'clicked'
-                : generating
-                    ? 'generating'
-                    : 'ready',
-            injected: true,
-            ready,
-            generating
-        };
     }"#
     .replace("__COMPOSER_SELECTORS__", composer_selectors)
     .replace("__STOP_SELECTORS__", stop_selectors)
