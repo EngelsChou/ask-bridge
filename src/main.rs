@@ -468,14 +468,27 @@ impl Provider {
                 r#"[
                     "textarea#userInput",
                     "textarea[data-testid*=\"chat-input\"]",
+                    "[data-testid*=\"composer\"]",
+                    "[data-testid*=\"user-input\"]",
+                    "[data-testid*=\"chat-input\"]",
                     "[contenteditable=\"true\"][role=\"textbox\"]",
-                    "textarea",
+                    "div[contenteditable=\"true\"]",
                     "[contenteditable=\"true\"]",
+                    "textarea",
                     "[placeholder*=\"Copilot\"]",
                     "[placeholder*=\"傳送\"]",
+                    "[placeholder*=\"Message\"]",
                     "[aria-label*=\"Copilot\"]",
                     "[aria-label*=\"傳送\"]",
-                    "div[role=\"textbox\"]"
+                    "[aria-label*=\"Message\"]",
+                    "div[role=\"textbox\"]",
+                    "[class*=\"userInput\"]",
+                    "[class*=\"composer\"]",
+                    "[class*=\"chatInput\"]",
+                    "[class*=\"chat-input\"]",
+                    "[class*=\"searchBox\"]",
+                    "[class*=\"inputContainer\"]",
+                    "[data-lexical-editor=\"true\"]"
                 ]"#
             }
         }
@@ -624,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.14")]
+#[command(version = "0.3.15")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -5662,18 +5675,19 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
             }
 
             const buttonWidth = 150;
-            let left = Math.max(12, window.innerWidth - buttonWidth - 24);
-            let top = Math.max(12, window.innerHeight - 80);
+            let left = Math.max(12, window.innerWidth - buttonWidth - 32);
+            let top = 64;
             if (composer) {
                 try {
-                    const composerRect = composer.getBoundingClientRect();
+                    const parentBox = composer.closest('[class*="input"], [class*="composer"], [class*="box"], [class*="container"], form') || composer;
+                    const boxRect = parentBox.getBoundingClientRect();
                     left = Math.max(
                         12,
-                        Math.min(window.innerWidth - buttonWidth - 12, composerRect.right - buttonWidth - 8)
+                        Math.min(window.innerWidth - buttonWidth - 12, boxRect.right - buttonWidth - 12)
                     );
-                    top = composerRect.top >= 48
-                        ? composerRect.top - 44
-                        : Math.min(window.innerHeight - 50, composerRect.bottom + 8);
+                    top = boxRect.top >= 44
+                        ? boxRect.top - 42
+                        : Math.min(window.innerHeight - 50, boxRect.bottom + 8);
                 } catch (e) {}
             }
             button.style.left = `${Math.round(left)}px`;
