@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.21")]
+#[command(version = "0.3.22")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -3813,6 +3813,9 @@ mod tests {
             // recognized as the model selector for a second switch.
             "/^(?:gpt|claude)\\d/.test(label)",
             "candidateLabels",
+            // An already-open menu must be reused instead of toggled shut.
+            "const openMenu = async () => {",
+            "if (menuItems().length > 0) return true;",
         ] {
             assert!(script.contains(expected), "missing {expected:?}");
         }
@@ -7421,6 +7424,10 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                     for (const [pattern, replacement] of substitutions) {
                         normalized = normalized.replace(pattern, replacement);
                     }
+                    // The pill truncates the active model to a short English
+                    // form ("GPT 5.5 Think" for "GPT 5.5 深度思考"), so treat a
+                    // trailing short mode name as the full one.
+                    normalized = normalized.replace(/think$/, 'thinkdeeper').replace(/quick$/, 'quickresponse');
                     const aliases = new Map([
                         ['auto', 'auto'], ['automatic', 'auto'],
                         ['quick', 'quickresponse'], ['quickresponse', 'quickresponse'],
@@ -7509,13 +7516,29 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                     window.__switch_model_status = 'success:' + labelsOf(trigger)[0];
                     return;
                 }
-                click(trigger);
-                await sleep(800);
-
                 const menuItems = () => Array.from(document.querySelectorAll(
                     '[role="menuitem"], [role="menuitemradio"], [role="option"], [role="radio"], [role="menu"] button, [role="listbox"] button, [role="dialog"] button'
                 )).filter(visible);
                 const findChoice = (wanted) => menuItems().find((element) => matches(element, wanted));
+
+                // The menu may already be open (Escape does not always close
+                // it, and with a visible window the user can leave it open).
+                // Clicking the pill would then close it, so only click when
+                // nothing is showing, and retry once for a swallowed click.
+                const openMenu = async () => {
+                    if (menuItems().length > 0) return true;
+                    for (let attempt = 0; attempt < 2; attempt++) {
+                        click(trigger);
+                        await sleep(800);
+                        if (menuItems().length > 0) return true;
+                    }
+                    return false;
+                };
+
+                if (!(await openMenu())) {
+                    window.__switch_model_status = 'error: Copilot model menu did not open';
+                    return;
+                }
 
                 let choice = findChoice(target);
                 if (!choice) {
@@ -7543,12 +7566,9 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                         if (label && !candidateLabels.includes(label)) candidateLabels.push(label);
                     }
                     for (const label of candidateLabels) {
-                        if (menuItems().length === 0) {
-                            // A previous attempt clicked a leaf and closed the
-                            // menu; reopen before trying the next candidate.
-                            click(trigger);
-                            await sleep(800);
-                        }
+                        // A previous attempt may have clicked a leaf and closed
+                        // the menu; reopen before trying the next candidate.
+                        if (!(await openMenu())) break;
                         const submenu = menuItems().find((element) => labelsOf(element)[0] === label);
                         if (!submenu) continue;
                         click(submenu);
