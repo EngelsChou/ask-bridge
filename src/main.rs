@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.19")]
+#[command(version = "0.3.20")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -9398,6 +9398,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Err(e) = start_chrome_if_needed(is_headless, command_verbose) {
         eprintln!("Error starting Chrome: {}", e);
         std::process::exit(1);
+    }
+    if !is_headless {
+        // A window reused from a previous background run can still be
+        // off-screen or minimized right after the launch-time restore, so
+        // re-assert visibility before any visible command starts working.
+        ensure_managed_chrome_window_visible();
     }
     if provider == Provider::Copilot {
         append_copilot_diagnostic(
