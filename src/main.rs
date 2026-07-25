@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.18")]
+#[command(version = "0.3.19")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -1857,6 +1857,94 @@ unsafe extern "system" fn move_visible_chrome_window_callback(
     }
     1
 }
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn find_onscreen_chrome_window_callback(
+    window: NativeWindowHandle,
+    parameter: isize,
+) -> i32 {
+    let context = unsafe { &mut *(parameter as *mut VisibleWindowContext) };
+    let mut pid = 0_u32;
+    unsafe {
+        GetWindowThreadProcessId(window, &mut pid);
+    }
+    let pid_is_validated = context
+        .processes
+        .iter()
+        .any(|process| process.pid == pid && validated_chrome_process_is_running(process));
+    if !pid_is_validated {
+        return 1;
+    }
+    let Some(class_name) = (unsafe { chrome_window_class_name(window) }) else {
+        return 1;
+    };
+    const GW_OWNER: u32 = 4;
+    let has_owner = !(unsafe { GetWindow(window, GW_OWNER) }).is_null();
+    let Some(title_length) = (unsafe { chrome_window_title_length(window) }) else {
+        return 1;
+    };
+    if !chrome_window_matches_predicate(pid_is_validated, &class_name, has_owner, title_length) {
+        return 1;
+    }
+    if unsafe { chrome_window_is_onscreen(window) } {
+        context.moved = true;
+        return 0;
+    }
+    1
+}
+
+#[cfg(target_os = "windows")]
+fn any_managed_chrome_window_onscreen(processes: &[ValidatedChromeProcess]) -> bool {
+    let mut context = VisibleWindowContext {
+        processes,
+        moved: false,
+    };
+    unsafe {
+        EnumWindows(
+            Some(find_onscreen_chrome_window_callback),
+            (&mut context as *mut VisibleWindowContext) as isize,
+        );
+    }
+    context.moved
+}
+
+/// Best-effort re-assertion that the managed Chrome window is on the visible
+/// desktop. A background-launched window (off-screen and sometimes minimized)
+/// can shrug off the single restore attempt made while Chrome is still busy
+/// starting up, which left interactive listener sessions running invisibly.
+/// Does nothing once a managed window is already on screen, so it never
+/// fights a user who minimized the window intentionally.
+#[cfg(target_os = "windows")]
+fn ensure_managed_chrome_window_visible() {
+    let snapshot = ChromeDebugSnapshot {
+        listener_pids: debug_port_listener_pids(),
+        record: read_chrome_process_record(),
+        browser_id: debug_browser_id(),
+        // Skip the slow command-line scan: the recorded identity is enough
+        // here, and command-line reads are blocked by recent Chrome anyway.
+        ask_pids: Vec::new(),
+    };
+    let pids = chrome_window_candidate_pids(&snapshot);
+    if pids.is_empty() {
+        return;
+    }
+    let Ok(expected_chrome_path) = find_chrome_path() else {
+        return;
+    };
+    let processes = open_validated_chrome_processes(&pids, &expected_chrome_path);
+    if processes.is_empty() || any_managed_chrome_window_onscreen(&processes) {
+        return;
+    }
+    for _ in 0..10 {
+        if try_move_chrome_window_to_visible_position(&processes) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn ensure_managed_chrome_window_visible() {}
 
 #[cfg(target_os = "windows")]
 fn try_move_chrome_window_to_visible_position(processes: &[ValidatedChromeProcess]) -> bool {
@@ -5911,6 +5999,13 @@ fn wait_for_copilot_listener_ready(
     );
 
     loop {
+        // The interactive session must actually be visible: re-assert the
+        // window position during the first ~30 seconds in case the one-shot
+        // restore raced a still-minimized background launch.
+        if iteration < 30 && iteration % 5 == 0 {
+            ensure_managed_chrome_window_visible();
+        }
+
         // Sign-in redirects can move the tab through login domains; keep the
         // Copilot tab selected whenever one is present again.
         if iteration % 10 == 0
@@ -6020,6 +6115,7 @@ fn wait_for_copilot_listener(
     let timeout = Duration::from_secs(timeout_seconds);
     let mut last_status = "initializing".to_string();
     let mut last_error: Option<String> = None;
+    let mut poll_iteration: u64 = 0;
 
     append_copilot_diagnostic(
         "listener_started",
@@ -6027,6 +6123,13 @@ fn wait_for_copilot_listener(
     );
 
     while started.elapsed() < timeout {
+        // Keep the interactive window on the visible desktop through the
+        // first ~30 seconds; afterwards leave it alone so a user-initiated
+        // minimize is respected during long waits.
+        if started.elapsed() < Duration::from_secs(30) && poll_iteration % 12 == 0 {
+            ensure_managed_chrome_window_visible();
+        }
+        poll_iteration += 1;
         match call_mcp_tool(
             config_path,
             "evaluate_script",
