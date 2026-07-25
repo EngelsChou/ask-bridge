@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.17")]
+#[command(version = "0.3.18")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -3717,6 +3717,10 @@ mod tests {
             "submenuKeys",
             "target.startsWith(label)",
             "model not found in menu",
+            // Composite localized labels ("GPT 5.5 深度思考") must canonicalize
+            // to the same token as "GPT 5.5 Think deeper".
+            "更深入思考|深入思考|深度思考",
+            "快速回應|快速回覆|快速响应|快速回复",
         ] {
             assert!(script.contains(expected), "missing {expected:?}");
         }
@@ -7293,15 +7297,25 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                 const norm = (value) => (value || '').normalize('NFKC').toLowerCase()
                     .replace(/[^\p{Letter}\p{Number}]+/gu, '');
                 const canonical = (value) => {
-                    const normalized = norm(value);
+                    let normalized = norm(value);
+                    // Localized tenants render composite labels such as
+                    // "GPT 5.5 深度思考" while the fixed MCP tools pass
+                    // "GPT 5.5 Think deeper" (and vice versa), so translate the
+                    // mode names inside composite strings before comparing.
+                    const substitutions = [
+                        [/更深入思考|深入思考|深度思考/g, 'thinkdeeper'],
+                        [/快速回應|快速回覆|快速响应|快速回复/g, 'quickresponse'],
+                        [/自動|自动/g, 'auto'],
+                        [/更多/g, 'more']
+                    ];
+                    for (const [pattern, replacement] of substitutions) {
+                        normalized = normalized.replace(pattern, replacement);
+                    }
                     const aliases = new Map([
-                        ['auto', 'auto'], ['automatic', 'auto'], ['自動', 'auto'], ['自动', 'auto'],
+                        ['auto', 'auto'], ['automatic', 'auto'],
                         ['quick', 'quickresponse'], ['quickresponse', 'quickresponse'],
-                        ['快速回應', 'quickresponse'], ['快速回覆', 'quickresponse'],
-                        ['快速响应', 'quickresponse'], ['快速回复', 'quickresponse'],
-                        ['thinkdeeper', 'thinkdeeper'], ['深入思考', 'thinkdeeper'],
-                        ['深度思考', 'thinkdeeper'], ['更深入思考', 'thinkdeeper'],
-                        ['more', 'more'], ['更多', 'more']
+                        ['thinkdeeper', 'thinkdeeper'],
+                        ['more', 'more']
                     ]);
                     return aliases.get(normalized) || normalized;
                 };
@@ -7344,7 +7358,7 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                 await sleep(250);
 
                 const triggerPattern = /model selector|model picker|mode selector|response mode|模型選擇|型號選擇|模式選擇|回應模式|响应模式|auto|quick response|think deeper|自動|自动|快速回應|快速回覆|快速响应|快速回复|深入思考|深度思考/i;
-                const triggers = Array.from(document.querySelectorAll('button, [role="button"]'))
+                const findTrigger = () => Array.from(document.querySelectorAll('button, [role="button"]'))
                     .filter(visible)
                     .filter((element) => triggerPattern.test(labelsOf(element).join(' ')))
                     .sort((left, right) => {
@@ -7355,8 +7369,15 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                             return popup + explicit - rect.top + rect.left / 10000;
                         };
                         return score(right) - score(left);
-                    });
-                const trigger = triggers[0];
+                    })[0] || null;
+                // The selector pill hydrates after the composer on a cold
+                // start, so keep looking for a while instead of failing the
+                // very first query after Chrome launches.
+                let trigger = findTrigger();
+                for (let attempt = 0; attempt < 20 && !trigger; attempt++) {
+                    await sleep(500);
+                    trigger = findTrigger();
+                }
                 if (!trigger) {
                     window.__switch_model_status = 'error: Copilot model selector not found';
                     return;
