@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.20")]
+#[command(version = "0.3.21")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -3803,12 +3803,16 @@ mod tests {
             "自動",
             "更多",
             "submenuKeys",
-            "target.startsWith(label)",
+            "label.startsWith(brand)",
             "model not found in menu",
             // Composite localized labels ("GPT 5.5 深度思考") must canonicalize
             // to the same token as "GPT 5.5 Think deeper".
-            "更深入思考|深入思考|深度思考",
-            "快速回應|快速回覆|快速响应|快速回复",
+            "更深入思考|深入思考|深度思考|深度版|思考版",
+            "快速回應|快速回覆|快速响应|快速回复|快速版",
+            // The active-model pill ("GPT 5.5 快速版") must still be
+            // recognized as the model selector for a second switch.
+            "/^(?:gpt|claude)\\d/.test(label)",
+            "candidateLabels",
         ] {
             assert!(script.contains(expected), "missing {expected:?}");
         }
@@ -7405,9 +7409,12 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                     // "GPT 5.5 深度思考" while the fixed MCP tools pass
                     // "GPT 5.5 Think deeper" (and vice versa), so translate the
                     // mode names inside composite strings before comparing.
+                    // The active-model pill and the menu entry disagree in
+                    // localized tenants: the menu offers "GPT 5.5 快速回應"
+                    // while the pill then reads "GPT 5.5 快速版".
                     const substitutions = [
-                        [/更深入思考|深入思考|深度思考/g, 'thinkdeeper'],
-                        [/快速回應|快速回覆|快速响应|快速回复/g, 'quickresponse'],
+                        [/更深入思考|深入思考|深度思考|深度版|思考版/g, 'thinkdeeper'],
+                        [/快速回應|快速回覆|快速响应|快速回复|快速版/g, 'quickresponse'],
                         [/自動|自动/g, 'auto'],
                         [/更多/g, 'more']
                     ];
@@ -7461,9 +7468,22 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                 await sleep(250);
 
                 const triggerPattern = /model selector|model picker|mode selector|response mode|模型選擇|型號選擇|模式選擇|回應模式|响应模式|auto|quick response|think deeper|自動|自动|快速回應|快速回覆|快速响应|快速回复|深入思考|深度思考/i;
+                const modeTokens = ['auto', 'quickresponse', 'thinkdeeper'];
+                // Once a concrete model is active the pill stops using any of
+                // the menu wording and just shows the model, e.g.
+                // "GPT 5.5 快速版". Recognize that shape too, otherwise a
+                // second switch in the same conversation cannot find the menu.
+                const isModelTrigger = (element) => {
+                    const labels = labelsOf(element);
+                    if (triggerPattern.test(labels.join(' '))) return true;
+                    return labels.some((value) => {
+                        const label = canonical(value);
+                        return modeTokens.includes(label) || /^(?:gpt|claude)\d/.test(label);
+                    });
+                };
                 const findTrigger = () => Array.from(document.querySelectorAll('button, [role="button"]'))
                     .filter(visible)
-                    .filter((element) => triggerPattern.test(labelsOf(element).join(' ')))
+                    .filter(isModelTrigger)
                     .sort((left, right) => {
                         const score = (element) => {
                             const rect = element.getBoundingClientRect();
@@ -7501,18 +7521,40 @@ fn build_copilot_switch_model_js(target_json: &str) -> String {
                 if (!choice) {
                     // Current M365 Chat nests concrete choices such as
                     // "GPT 5.5 Think deeper" under a top-level "GPT" item.
-                    // Older tenants expose the same area as "More".
+                    // Older tenants expose the same area as "More", and once a
+                    // model of that brand is active the row shows the active
+                    // model instead ("GPT 5.5 快速版"), so try every plausible
+                    // submenu row rather than only an exact "GPT" match.
                     const brand = (target.match(/^(?:gpt|claude)/) || [])[0] || '';
                     const submenuKeys = [brand, 'more'].filter(Boolean);
-                    const submenu = menuItems().find((element) => labelsOf(element).some((value) => {
+                    const isSubmenuCandidate = (element) => labelsOf(element).some((value) => {
                         const label = canonical(value);
-                        return submenuKeys.includes(label) ||
-                            (brand && label.startsWith(brand) && target.startsWith(label) && label.length < target.length);
-                    }));
-                    if (submenu) {
+                        return submenuKeys.includes(label) || Boolean(brand) && label.startsWith(brand);
+                    });
+                    const rank = (element) => {
+                        const expandable = /menu|true/.test(element.getAttribute('aria-haspopup') || '') ||
+                            element.getAttribute('aria-expanded') !== null;
+                        const exact = labelsOf(element).some((value) => submenuKeys.includes(canonical(value)));
+                        return (expandable ? 2 : 0) + (exact ? 1 : 0);
+                    };
+                    const candidateLabels = [];
+                    for (const element of menuItems().filter(isSubmenuCandidate).sort((left, right) => rank(right) - rank(left))) {
+                        const label = labelsOf(element)[0];
+                        if (label && !candidateLabels.includes(label)) candidateLabels.push(label);
+                    }
+                    for (const label of candidateLabels) {
+                        if (menuItems().length === 0) {
+                            // A previous attempt clicked a leaf and closed the
+                            // menu; reopen before trying the next candidate.
+                            click(trigger);
+                            await sleep(800);
+                        }
+                        const submenu = menuItems().find((element) => labelsOf(element)[0] === label);
+                        if (!submenu) continue;
                         click(submenu);
                         await sleep(800);
                         choice = findChoice(target);
+                        if (choice) break;
                     }
                 }
                 if (!choice) {
