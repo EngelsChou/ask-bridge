@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.23")]
+#[command(version = "0.3.24")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -2693,13 +2693,16 @@ fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
     }
 
     for pid in &close_pids {
+        // Capture instead of inheriting stdio: taskkill prints a localized
+        // message in the console OEM codepage, which corrupts this command's
+        // own UTF-8 stdout for callers such as the MCP server.
         #[cfg(target_os = "windows")]
         {
-            let _ = Command::new("taskkill").args(["/PID", pid, "/T"]).status();
+            let _ = Command::new("taskkill").args(["/PID", pid, "/T"]).output();
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = Command::new("kill").args(["-TERM", pid]).status();
+            let _ = Command::new("kill").args(["-TERM", pid]).output();
         }
     }
 
@@ -2716,11 +2719,11 @@ fn close_ask_chrome_on_debug_port(profile_path: &str) -> Result<bool, String> {
                 {
                     let _ = Command::new("taskkill")
                         .args(["/PID", pid, "/T", "/F"])
-                        .status();
+                        .output();
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    let _ = Command::new("kill").args(["-KILL", pid]).status();
+                    let _ = Command::new("kill").args(["-KILL", pid]).output();
                 }
             }
         }
