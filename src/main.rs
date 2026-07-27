@@ -637,7 +637,7 @@ fn parse_chatgpt_agent_prompt(prompt: &str) -> Option<ChatGptAgentPrompt<'_>> {
 
 #[derive(Parser)]
 #[command(name = "ask-bridge")]
-#[command(version = "0.3.22")]
+#[command(version = "0.3.23")]
 #[command(disable_version_flag = true)]
 #[command(about = "AI browser CLI - Ask ChatGPT, Gemini, Claude or Microsoft 365 Copilot from your Terminal with your subscription", long_about = None)]
 struct Cli {
@@ -4063,6 +4063,12 @@ mod tests {
         assert!(script.contains("const seen = new Set();"));
         assert!(script.contains("existing.contains(candidate)"));
         assert!(script.contains("[aria-busy=\"true\"]"));
+        // A long prompt scrolls the composer off the top of the viewport, so
+        // the send button must still be matched by ancestor containment and
+        // the geometric fallback must read a live rect, never a cached one.
+        assert!(script.contains("composerAncestors.some((ancestor) => ancestor.contains(button))"));
+        assert!(script.contains("const composerRect = composer.getBoundingClientRect();"));
+        assert!(!script.contains("const composerRect = composer.getBoundingClientRect();\n                    const isNearComposer"));
 
         let state_guard = script
             .find("const attachmentState = readAttachmentState();")
@@ -8366,8 +8372,18 @@ fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String
                     const composerWrapper = composer.closest(
                         '[data-testid*="composer"], [data-testid*="chat-input"], [class*="Composer"], [class*="ChatInput"], [class*="PromptInput"]'
                     );
-                    const composerRect = composer.getBoundingClientRect();
+                    // A long prompt grows the composer until it scrolls past the
+                    // top of the viewport, which pushes the pixel distance to
+                    // the send button far beyond any fixed threshold. Ancestor
+                    // containment survives that, so walk a bounded number of
+                    // levels up from the composer and only fall back to the
+                    // geometric test (recomputed live, never cached).
+                    const composerAncestors = [];
+                    for (let node = composer, depth = 0; node && depth < 8; node = node.parentElement, depth++) {
+                        composerAncestors.push(node);
+                    }
                     const isNearComposer = (button) => {
+                        const composerRect = composer.getBoundingClientRect();
                         const rect = button.getBoundingClientRect();
                         const verticalDistance = Math.max(
                             0,
@@ -8381,6 +8397,7 @@ fn build_copilot_click_send_js(expected_indicator_count: usize) -> Result<String
                     const belongsToComposer = (button) =>
                         Boolean(composerForm && composerForm.contains(button)) ||
                         Boolean(composerWrapper && composerWrapper.contains(button)) ||
+                        composerAncestors.some((ancestor) => ancestor.contains(button)) ||
                         isNearComposer(button);
                     const findSendButton = () => {
                         const seen = new Set();
