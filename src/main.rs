@@ -122,6 +122,15 @@ enum Provider {
 }
 
 impl Provider {
+    fn all() -> [Self; 4] {
+        [
+            Provider::ChatGpt,
+            Provider::Gemini,
+            Provider::Claude,
+            Provider::Copilot,
+        ]
+    }
+
     fn from_config_value(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "chatgpt" | "chat-gpt" | "chat_gpt" => Some(Provider::ChatGpt),
@@ -160,14 +169,9 @@ impl Provider {
     }
 
     fn from_url(url: &str) -> Option<Self> {
-        [
-            Provider::ChatGpt,
-            Provider::Gemini,
-            Provider::Claude,
-            Provider::Copilot,
-        ]
-        .into_iter()
-        .find(|provider| provider.owns_url(url))
+        Self::all()
+            .into_iter()
+            .find(|provider| provider.owns_url(url))
     }
 
     fn ready_check_js(self) -> &'static str {
@@ -721,7 +725,7 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         verbose: bool,
     },
-    /// Open Microsoft 365 Copilot and wait until "Return VS Code" is clicked
+    /// Open the selected provider and wait until "Return VS Code" is clicked
     Listen,
     /// Open Chrome browser and wait for manual login
     Login,
@@ -3083,19 +3087,13 @@ fn render_markdown(markdown: &str, use_glow: bool) -> Result<(), String> {
 }
 
 fn validate_provider_feature_support(provider: Provider, cli: &Cli) -> Result<(), String> {
-    if matches!(cli.command, Some(Commands::Listen)) {
-        if provider != Provider::Copilot {
-            return Err(
-                "The listen command is available only for Microsoft 365 Copilot. Use --provider copilot."
-                    .to_string(),
-            );
-        }
-        if !cli.images.is_empty() || !cli.files.is_empty() || cli.model.is_some() {
-            return Err(
-                "The listen command does not accept --image, --file, or --model. Add files and choose the model directly in the visible Microsoft 365 Copilot page."
-                    .to_string(),
-            );
-        }
+    if matches!(cli.command, Some(Commands::Listen))
+        && (!cli.images.is_empty() || !cli.files.is_empty() || cli.model.is_some())
+    {
+        return Err(format!(
+            "The listen command does not accept --image, --file, or --model. Add files and choose the model directly in the visible {} page.",
+            provider.display_name()
+        ));
     }
 
     if provider == Provider::Gemini && !cli.images.is_empty() {
@@ -3495,14 +3493,13 @@ mod tests {
     }
 
     #[test]
-    fn listener_rejects_non_copilot_and_automated_attachment_or_model_options() {
-        let non_copilot =
-            Cli::try_parse_from(["ask-bridge", "--provider", "chatgpt", "listen"]).unwrap();
-        assert!(
-            validate_provider_feature_support(Provider::ChatGpt, &non_copilot)
-                .unwrap_err()
-                .contains("only for Microsoft 365 Copilot")
-        );
+    fn listener_accepts_every_provider_and_rejects_automated_attachment_or_model_options() {
+        for provider in Provider::all() {
+            let cli =
+                Cli::try_parse_from(["ask-bridge", "--provider", &provider.to_string(), "listen"])
+                    .unwrap();
+            assert!(validate_provider_feature_support(provider, &cli).is_ok());
+        }
 
         let automated_input = Cli::try_parse_from([
             "ask-bridge",
@@ -3827,27 +3824,32 @@ mod tests {
     }
 
     #[test]
-    fn copilot_listener_script_injects_a_safe_self_cleaning_return_button() {
-        let script = build_copilot_listener_poll_js().unwrap();
-        for expected in [
-            "ask-bridge-return-vscode",
-            "Return VS Code",
-            "__ask_bridge_listener_state_v1",
-            "__ask_bridge_listener_cleanup_timer_v1",
-            "lastHeartbeat",
-            "5000",
-            "Waiting for M365",
-            "Waiting for response…",
-            "responseText",
-            "targetContainer.appendChild(button)",
-            "const hasResponse = latestText.length > 0",
-            "const ready = hasResponse && !generating && !state.clicked",
-        ] {
-            assert!(script.contains(expected), "missing {expected:?}");
+    fn listener_script_supports_every_provider_with_a_safe_self_cleaning_return_button() {
+        for provider in Provider::all() {
+            let script = build_listener_poll_js(provider).unwrap();
+            for expected in [
+                "ask-bridge-return-vscode",
+                "Return VS Code",
+                "__ask_bridge_listener_state_v1",
+                "__ask_bridge_listener_cleanup_timer_v1",
+                "lastHeartbeat",
+                "5000",
+                provider.display_name(),
+                "Waiting for response…",
+                "responseText",
+                "targetContainer.appendChild(button)",
+                "const hasResponse = latestText.length > 0",
+                "const ready = hasResponse && !generating && !state.clicked",
+            ] {
+                assert!(
+                    script.contains(expected),
+                    "missing {expected:?} for {provider}"
+                );
+            }
+            let serialized_selector = serde_json::to_string(provider.assistant_selector()).unwrap();
+            assert!(script.contains(&serialized_selector));
         }
-        let serialized_selector =
-            serde_json::to_string(Provider::Copilot.assistant_selector()).unwrap();
-        assert!(script.contains(&serialized_selector));
+        let script = build_listener_poll_js(Provider::Copilot).unwrap();
         assert!(script.contains("button[data-testid*="));
         assert!(!script.contains("innerHTML ="));
     }
@@ -5714,19 +5716,20 @@ fn scrape_latest_markdown_from_dom(
     Ok(content)
 }
 
-fn build_copilot_listener_poll_js() -> Result<String, String> {
-    let composer_selectors = Provider::Copilot.composer_selectors_json();
-    let stop_selectors = Provider::Copilot.stop_button_selectors_json();
-    let assistant_selector = serde_json::to_string(Provider::Copilot.assistant_selector())
-        .map_err(|e| format!("Failed to serialize Copilot assistant selector: {}", e))?;
-    let action_selector = serde_json::to_string(COPILOT_ACTION_CONTROL_SELECTOR)
-        .map_err(|e| format!("Failed to serialize Copilot action selector: {}", e))?;
+fn build_listener_poll_js(provider: Provider) -> Result<String, String> {
+    let composer_selectors = provider.composer_selectors_json();
+    let stop_selectors = provider.stop_button_selectors_json();
+    let assistant_selector = serde_json::to_string(provider.assistant_selector())
+        .map_err(|e| format!("Failed to serialize assistant selector: {}", e))?;
+    let provider_name = serde_json::to_string(provider.display_name())
+        .map_err(|e| format!("Failed to serialize provider name: {}", e))?;
 
     Ok(r#"() => {
         try {
             const stateKey = '__ask_bridge_listener_state_v1';
             const timerKey = '__ask_bridge_listener_cleanup_timer_v1';
             const buttonId = 'ask-bridge-return-vscode';
+            const providerName = __PROVIDER_NAME__;
             const now = Date.now();
             let state = window[stateKey];
             if (!state || state.version !== 1) {
@@ -5831,7 +5834,7 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                 button = document.createElement('button');
                 button.id = buttonId;
                 button.type = 'button';
-                button.setAttribute('aria-label', 'Return the latest Microsoft 365 Copilot response to VS Code');
+                button.setAttribute('aria-label', `Return the latest ${providerName} response to VS Code`);
                 button.setAttribute('data-ask-bridge-control', 'return-vscode');
                 button.textContent = 'Return VS Code';
                 Object.assign(button.style, {
@@ -5938,7 +5941,7 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
                 button.style.cursor = ready ? 'pointer' : 'not-allowed';
                 button.style.opacity = ready ? '1' : '.72';
                 button.textContent = generating
-                    ? 'Waiting for M365…'
+                    ? `Waiting for ${providerName}…`
                     : hasResponse
                         ? 'Return VS Code'
                         : 'Waiting for response…';
@@ -5973,10 +5976,10 @@ fn build_copilot_listener_poll_js() -> Result<String, String> {
     .replace("__COMPOSER_SELECTORS__", composer_selectors)
     .replace("__STOP_SELECTORS__", stop_selectors)
     .replace("__ASSISTANT_SELECTOR__", &assistant_selector)
-    .replace("__ACTION_SELECTOR__", &action_selector))
+    .replace("__PROVIDER_NAME__", &provider_name))
 }
 
-fn cleanup_copilot_listener(config_path: &str) {
+fn cleanup_listener(config_path: &str) {
     let _ = call_mcp_tool(
         config_path,
         "evaluate_script",
@@ -5994,12 +5997,13 @@ fn cleanup_copilot_listener(config_path: &str) {
     );
 }
 
-/// Wait until the Microsoft 365 Copilot page is signed in and shows the chat
+/// Wait until the selected provider page is signed in and shows the chat
 /// composer. The interactive listener must survive a full manual sign-in
 /// (password + MFA can take minutes), so this waits up to the listener
 /// timeout instead of the short readiness window used by automated queries.
-fn wait_for_copilot_listener_ready(
+fn wait_for_listener_ready(
     config_path: &str,
+    provider: Provider,
     timeout_seconds: u64,
     verbose: bool,
 ) -> Result<(), String> {
@@ -6009,27 +6013,29 @@ fn wait_for_copilot_listener_ready(
     let mut blocked_since: Option<Instant> = None;
     let mut iteration: u64 = 0;
 
-    append_copilot_diagnostic(
-        "listener_waiting_ready",
-        serde_json::json!({ "timeout_seconds": timeout_seconds }),
-    );
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "listener_waiting_ready",
+            serde_json::json!({ "timeout_seconds": timeout_seconds }),
+        );
+    }
 
     loop {
         // The interactive session must actually be visible: re-assert the
         // window position during the first ~30 seconds in case the one-shot
         // restore raced a still-minimized background launch.
-        if iteration < 30 && iteration % 5 == 0 {
+        if iteration < 30 && iteration.is_multiple_of(5) {
             ensure_managed_chrome_window_visible();
         }
 
         // Sign-in redirects can move the tab through login domains; keep the
-        // Copilot tab selected whenever one is present again.
-        if iteration % 10 == 0
+        // provider tab selected whenever one is present again.
+        if iteration.is_multiple_of(10)
             && let Ok(list_res) = call_mcp_tool(config_path, "list_pages", serde_json::json!({}))
             && let Ok(text) = tool_text(&list_res)
             && let Some(page) = parse_pages(&text)
                 .into_iter()
-                .find(|page| Provider::Copilot.owns_url(&page.url))
+                .find(|page| provider.owns_url(&page.url))
         {
             let _ = call_mcp_tool(
                 config_path,
@@ -6038,34 +6044,36 @@ fn wait_for_copilot_listener_ready(
             );
         }
 
-        // A /chat/blocked redirect can appear transiently while sign-in
-        // redirects settle, so only give up when it persists.
-        let current_url = call_mcp_tool(
-            config_path,
-            "evaluate_script",
-            serde_json::json!({ "function": "() => window.location.href" }),
-        )
-        .ok()
-        .and_then(|res| parse_script_result(&res).ok())
-        .and_then(|parsed| parsed.as_str().map(|url| url.to_string()))
-        .unwrap_or_default();
-        if let Some(error) = copilot_blocked_page_error(&current_url) {
-            let since = *blocked_since.get_or_insert_with(Instant::now);
-            if since.elapsed() >= Duration::from_secs(15) {
-                append_copilot_diagnostic(
-                    "copilot_unavailable",
-                    serde_json::json!({ "reason": "blocked_page", "phase": "listener_ready" }),
-                );
-                return Err(error);
+        if provider == Provider::Copilot {
+            // A /chat/blocked redirect can appear transiently while sign-in
+            // redirects settle, so only give up when it persists.
+            let current_url = call_mcp_tool(
+                config_path,
+                "evaluate_script",
+                serde_json::json!({ "function": "() => window.location.href" }),
+            )
+            .ok()
+            .and_then(|res| parse_script_result(&res).ok())
+            .and_then(|parsed| parsed.as_str().map(|url| url.to_string()))
+            .unwrap_or_default();
+            if let Some(error) = copilot_blocked_page_error(&current_url) {
+                let since = *blocked_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_secs(15) {
+                    append_copilot_diagnostic(
+                        "copilot_unavailable",
+                        serde_json::json!({ "reason": "blocked_page", "phase": "listener_ready" }),
+                    );
+                    return Err(error);
+                }
+            } else {
+                blocked_since = None;
             }
-        } else {
-            blocked_since = None;
         }
 
         let signals = call_mcp_tool(
             config_path,
             "evaluate_script",
-            serde_json::json!({ "function": Provider::Copilot.login_signals_js() }),
+            serde_json::json!({ "function": provider.login_signals_js() }),
         )
         .and_then(|res| parse_script_result(&res))
         .and_then(|parsed| {
@@ -6075,22 +6083,27 @@ fn wait_for_copilot_listener_ready(
 
         if let Ok(signals) = signals {
             if signals.composer {
-                append_copilot_diagnostic(
-                    "listener_ready",
-                    serde_json::json!({ "wait_duration_ms": started.elapsed().as_millis() }),
-                );
+                if provider == Provider::Copilot {
+                    append_copilot_diagnostic(
+                        "listener_ready",
+                        serde_json::json!({ "wait_duration_ms": started.elapsed().as_millis() }),
+                    );
+                }
                 if verbose {
                     eprintln!();
                 }
                 return Ok(());
             }
-            if !announced_login && signals.state(Provider::Copilot) == LoginState::LoggedOut {
+            if !announced_login && signals.state(provider) == LoginState::LoggedOut {
                 announced_login = true;
                 println!(
-                    "Microsoft 365 Copilot needs sign-in. Complete the login in the Chrome window; the listener keeps waiting (up to {} seconds).",
+                    "{} needs sign-in. Complete the login in the Chrome window; the listener keeps waiting (up to {} seconds).",
+                    provider.display_name(),
                     timeout_seconds
                 );
-                append_copilot_diagnostic("listener_waiting_login", serde_json::json!({}));
+                if provider == Provider::Copilot {
+                    append_copilot_diagnostic("listener_waiting_login", serde_json::json!({}));
+                }
             }
         }
 
@@ -6098,19 +6111,24 @@ fn wait_for_copilot_listener_ready(
             if verbose {
                 eprintln!();
             }
-            append_copilot_diagnostic(
-                "listener_ready_timeout",
-                serde_json::json!({ "timeout_seconds": timeout_seconds }),
-            );
+            if provider == Provider::Copilot {
+                append_copilot_diagnostic(
+                    "listener_ready_timeout",
+                    serde_json::json!({ "timeout_seconds": timeout_seconds }),
+                );
+            }
             return Err(format!(
-                "Timed out after {} seconds waiting for Microsoft 365 Copilot to become ready (sign-in incomplete or the chat composer never appeared). Sign in to https://m365.cloud.microsoft/chat in the ask-bridge Chrome window, then run the listener again.",
-                timeout_seconds
+                "Timed out after {} seconds waiting for {} to become ready (sign-in incomplete or the chat composer never appeared). Sign in to {} in the ask-bridge Chrome window, then run the listener again.",
+                timeout_seconds,
+                provider.display_name(),
+                provider.home_url()
             ));
         }
 
         if verbose {
             eprint!(
-                "\rWaiting for Microsoft 365 Copilot sign-in/readiness ({}s elapsed)...",
+                "\rWaiting for {} sign-in/readiness ({}s elapsed)...",
+                provider.display_name(),
                 started.elapsed().as_secs()
             );
             let _ = io::stderr().flush();
@@ -6120,29 +6138,32 @@ fn wait_for_copilot_listener_ready(
     }
 }
 
-fn wait_for_copilot_listener(
+fn wait_for_listener(
     config_path: &str,
+    provider: Provider,
     timeout_seconds: u64,
     verbose: bool,
 ) -> Result<String, String> {
-    cleanup_copilot_listener(config_path);
-    let poll_js = build_copilot_listener_poll_js()?;
+    cleanup_listener(config_path);
+    let poll_js = build_listener_poll_js(provider)?;
     let started = Instant::now();
     let timeout = Duration::from_secs(timeout_seconds);
     let mut last_status = "initializing".to_string();
     let mut last_error: Option<String> = None;
     let mut poll_iteration: u64 = 0;
 
-    append_copilot_diagnostic(
-        "listener_started",
-        serde_json::json!({ "timeout_seconds": timeout_seconds }),
-    );
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "listener_started",
+            serde_json::json!({ "timeout_seconds": timeout_seconds }),
+        );
+    }
 
     while started.elapsed() < timeout {
         // Keep the interactive window on the visible desktop through the
         // first ~30 seconds; afterwards leave it alone so a user-initiated
         // minimize is respected during long waits.
-        if started.elapsed() < Duration::from_secs(30) && poll_iteration % 12 == 0 {
+        if started.elapsed() < Duration::from_secs(30) && poll_iteration.is_multiple_of(12) {
             ensure_managed_chrome_window_visible();
         }
         poll_iteration += 1;
@@ -6160,28 +6181,30 @@ fn wait_for_copilot_listener(
                             .unwrap_or_default()
                             .trim()
                             .to_string();
-                        let extracted = copy_latest_markdown(config_path, Provider::Copilot)
+                        let extracted = copy_latest_markdown(config_path, provider)
                             .ok()
                             .filter(|value| !value.trim().is_empty());
-                        cleanup_copilot_listener(config_path);
+                        cleanup_listener(config_path);
                         let (answer, method) = match extracted {
                             Some(value) => (value, "latest_response_extractor"),
                             None if !fallback.is_empty() => (fallback, "listener_dom_snapshot"),
                             None => {
-                                return Err(
-                                    "Return VS Code was clicked, but no Microsoft 365 Copilot response could be extracted"
-                                        .to_string(),
-                                );
+                                return Err(format!(
+                                    "Return VS Code was clicked, but no {} response could be extracted",
+                                    provider.display_name()
+                                ));
                             }
                         };
-                        append_copilot_diagnostic(
-                            "listener_returned",
-                            serde_json::json!({
-                                "wait_duration_ms": started.elapsed().as_millis(),
-                                "response_character_count": answer.chars().count(),
-                                "method": method
-                            }),
-                        );
+                        if provider == Provider::Copilot {
+                            append_copilot_diagnostic(
+                                "listener_returned",
+                                serde_json::json!({
+                                    "wait_duration_ms": started.elapsed().as_millis(),
+                                    "response_character_count": answer.chars().count(),
+                                    "method": method
+                                }),
+                            );
+                        }
                         return Ok(answer);
                     }
                     last_error = None;
@@ -6205,15 +6228,17 @@ fn wait_for_copilot_listener(
     if verbose {
         eprintln!();
     }
-    cleanup_copilot_listener(config_path);
-    append_copilot_diagnostic(
-        "listener_timeout",
-        serde_json::json!({
-            "timeout_seconds": timeout_seconds,
-            "last_status": last_status,
-            "had_poll_error": last_error.is_some()
-        }),
-    );
+    cleanup_listener(config_path);
+    if provider == Provider::Copilot {
+        append_copilot_diagnostic(
+            "listener_timeout",
+            serde_json::json!({
+                "timeout_seconds": timeout_seconds,
+                "last_status": last_status,
+                "had_poll_error": last_error.is_some()
+            }),
+        );
+    }
     let detail = last_error
         .map(|error| format!(" Last browser error: {}", error))
         .unwrap_or_default();
@@ -9438,7 +9463,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let is_headless = match &cli.command {
         Some(Commands::Login) => false, // Force headful only for login command so user can see it to log in
-        Some(Commands::Listen) => false, // Listener is an explicitly interactive M365 browser session
+        Some(Commands::Listen) => false, // Listener is an explicitly interactive browser session
         Some(Commands::Get { .. }) => false, // Default get to headful for debugging by default
         _ => cli.headless, // Respect --headless (defaults to true) for all other commands (including Open)
     };
@@ -9615,27 +9640,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // window inside ensure_provider_tab would abort.
                 if let Err(e) = open_provider_tab(
                     &config_path,
-                    Provider::Copilot,
+                    provider,
                     cli.new,
                     is_headless,
                     command_verbose,
                 ) {
-                    eprintln!("Error ensuring Microsoft 365 Copilot tab: {}", e);
+                    eprintln!("Error ensuring {} tab: {}", provider.display_name(), e);
                     std::process::exit(1);
                 }
 
                 if let Err(e) =
-                    wait_for_copilot_listener_ready(&config_path, cli.timeout, command_verbose)
+                    wait_for_listener_ready(&config_path, provider, cli.timeout, command_verbose)
                 {
-                    eprintln!("Error waiting for Microsoft 365 Copilot: {}", e);
+                    eprintln!("Error waiting for {}: {}", provider.display_name(), e);
                     std::process::exit(1);
                 }
 
                 let markdown =
-                    match wait_for_copilot_listener(&config_path, cli.timeout, command_verbose) {
+                    match wait_for_listener(&config_path, provider, cli.timeout, command_verbose) {
                         Ok(markdown) => markdown,
                         Err(error) => {
-                            eprintln!("Error waiting for Microsoft 365 Copilot: {}", error);
+                            eprintln!("Error waiting for {}: {}", provider.display_name(), error);
                             std::process::exit(1);
                         }
                     };

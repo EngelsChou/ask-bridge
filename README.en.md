@@ -376,15 +376,18 @@ ask-bridge --provider claude open
 ask-bridge --provider copilot open
 ```
 
-### 11. Return a Manually Prepared M365 Response
+### 11. Return a Manually Prepared Web Response
 
-To work in a visible Microsoft 365 Copilot Chrome window, manually upload files or screenshots, and return the latest response to the caller when you are ready:
+`listen` supports ChatGPT, Gemini, Claude, and Microsoft 365 Copilot. It opens a visible Chrome window for direct website interaction and returns the latest response when you are ready:
 
 ```bash
+ask-bridge --provider chatgpt --timeout 1800 listen
+ask-bridge --provider gemini --timeout 1800 listen
+ask-bridge --provider claude --timeout 1800 listen
 ask-bridge --provider copilot --timeout 1800 listen
 ```
 
-A `Return VS Code` button appears beside the M365 composer. It remains disabled while a response is generating. Click it after the analysis finishes to extract the latest M365 response and write it to stdout. Add `--new` to start from a new conversation. Listener mode does not accept `--image`, `--file`, or `--model`; choose attachments and the model directly in the visible M365 page.
+A `Return VS Code` button appears beside the composer and remains disabled while a response is generating. Click it to write the selected provider's latest response to stdout. Add `--new` for a new conversation. Listener mode does not accept `--image`, `--file`, or `--model`; choose attachments and the model directly on the website.
 
 ### 12. Close the Browser Instance
 

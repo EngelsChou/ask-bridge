@@ -410,15 +410,18 @@ ask-bridge --provider claude open
 ask-bridge --provider copilot open
 ```
 
-### 11. 等候 M365 網頁手動分析後回傳
+### 11. 等候網頁手動分析後回傳
 
-若要在可見的 Microsoft 365 Copilot Chrome 中自行上傳檔案、截圖或加入工作內容，完成提問後再把最後一則回覆傳回呼叫端：
+`listen` 支援 ChatGPT、Gemini、Claude 與 Microsoft 365 Copilot。它會開啟可見的 Chrome，讓你在網站中手動操作，完成後再把最後一則回覆傳回呼叫端：
 
 ```bash
+ask-bridge --provider chatgpt --timeout 1800 listen
+ask-bridge --provider gemini --timeout 1800 listen
+ask-bridge --provider claude --timeout 1800 listen
 ask-bridge --provider copilot --timeout 1800 listen
 ```
 
-頁面輸入框旁會出現 `Return VS Code` 按鈕。回覆生成期間按鈕會保持停用；完成後按下按鈕，CLI 會擷取最後一則 M365 回覆並輸出至 stdout。加上 `--new` 可先開啟全新對話。此模式不接受 `--image`、`--file` 或 `--model`，附件與模型都由使用者直接在可見的 M365 頁面操作。
+頁面輸入框旁會出現 `Return VS Code` 按鈕。回覆生成期間按鈕會保持停用；完成後按下按鈕，CLI 會擷取所選 provider 的最後一則回覆並輸出至 stdout。加上 `--new` 可先開啟全新對話。此模式不接受 `--image`、`--file` 或 `--model`；附件與模型由使用者直接在網站操作。
 
 ### 12. 關閉瀏覽器 instance
 
